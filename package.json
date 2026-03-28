@@ -1,0 +1,49 @@
+{
+  "name": "versie",
+  "version": "1.0.0",
+  "description": "Version management library",
+  "main": "dist/versie.cjs",
+  "module": "dist/versie.mjs",
+  "types": "dist/versie.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/versie.d.ts",
+      "import": "./dist/versie.mjs",
+      "require": "./dist/versie.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "lint": "eslint src --max-warnings 0",
+    "lint:fix": "eslint src --fix",
+    "test": "vitest",
+    "build": "vite build",
+    "build:watch": "vite build --watch"
+  },
+  "keywords": [
+    "version",
+    "browser",
+    "vcs"
+  ],
+  "author": "Lyr",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "fast-diff": "^1.3.0",
+    "lru-cache": "^11.2.7",
+    "pako": "^2.1.0",
+    "typescript-result": "^3.5.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^25.5.0",
+    "@types/pako": "^2.0.4",
+    "eslint": "^9.39.4",
+    "typescript-eslint": "^8.57.2",
+    "vite": "^7.3.1",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.2.4"
+  }
+}
