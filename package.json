@@ -1,7 +1,7 @@
 {
   "name": "versie",
   "version": "1.0.0",
-  "description": "Version management library",
+  "description": "A simple and adaptive version management library",
   "main": "dist/versie.cjs",
   "module": "dist/versie.mjs",
   "types": "dist/versie.d.ts",
