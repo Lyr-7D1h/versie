@@ -68,27 +68,31 @@ export class Versie<M extends MetaData> {
    * returns null if already exists
    * */
   addBookmark(bookmark: Bookmark) {
-    return this.bookmarks.add(bookmark);
+    return this._bookmarks.add(bookmark);
   }
 
   setBookmarkCommit(name: string, commit: CommitHash) {
-    return this.bookmarks.setCommit(name, commit);
+    return this._bookmarks.setCommit(name, commit);
   }
 
   bookmarkLookup(commit: CommitHash) {
-    return this.bookmarks.bookmarkLookup(commit);
+    return this._bookmarks.bookmarkLookup(commit);
   }
 
   removeBookmark(name: string) {
-    return this.bookmarks.remove(name);
+    return this._bookmarks.remove(name);
   }
 
   renameBookmark(oldName: string, newName: string) {
-    return this.bookmarks.rename(oldName, newName);
+    return this._bookmarks.rename(oldName, newName);
   }
 
-  get bookmarks() {
-    return this._bookmarks;
+  getAllBookmarks() {
+    return this._bookmarks.getAllBookmarks();
+  }
+
+  getBookmark(name: string) {
+    return this._bookmarks.getBookmark(name);
   }
 
   /**
@@ -105,7 +109,7 @@ export class Versie<M extends MetaData> {
       const history: HistoryItem<M>[] = [];
       for (let i = 0; i < n; i++) {
         if (next === null) break;
-        const bookmarks = this.bookmarks.bookmarkLookup(next.hash) ?? [];
+        const bookmarks = this._bookmarks.bookmarkLookup(next.hash) ?? [];
         history.push({ commit: next, bookmarks });
 
         if (typeof next.parent === "undefined") break;

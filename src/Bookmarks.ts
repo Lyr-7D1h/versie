@@ -137,7 +137,7 @@ export class Bookmarks<M extends MetaData> {
     return Result.ok(newBookmark);
   }
 
-  getBookmarks(): Bookmark[] {
+  getAllBookmarks(): Bookmark[] {
     return [...this.bookmarks.values()];
   }
 

@@ -184,7 +184,7 @@ describe("VCS import / export", () => {
     if (!vcs2Result.ok) throw vcs2Result.error;
     const vcs2 = vcs2Result.value;
 
-    const bookmarks = vcs2.bookmarks.getBookmarks();
+    const bookmarks = vcs2.getAllBookmarks();
     expect(bookmarks).toHaveLength(1);
 
     const bookmark = bookmarks[0];
