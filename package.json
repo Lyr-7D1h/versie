@@ -2,6 +2,16 @@
   "name": "versie",
   "version": "1.0.0",
   "description": "A simple and adaptive version management library",
+  "author": "Lyr",
+  "license": "Apache-2.0",
+  "keywords": [
+    "version",
+    "browser",
+    "vcs"
+  ],
+  "repository": {
+    "url": "https://github.com/lyr-7d1h/versie"
+  },
   "main": "dist/versie.cjs",
   "module": "dist/versie.mjs",
   "types": "dist/versie.d.ts",
@@ -22,13 +32,6 @@
     "build": "vite build",
     "build:watch": "vite build --watch"
   },
-  "keywords": [
-    "version",
-    "browser",
-    "vcs"
-  ],
-  "author": "Lyr",
-  "license": "Apache-2.0",
   "dependencies": {
     "fast-diff": "^1.3.0",
     "lru-cache": "^11.2.7",
