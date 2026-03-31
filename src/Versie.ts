@@ -62,6 +62,22 @@ export class Versie<M extends MetaData> {
     return this._head;
   }
 
+  /** Set head to point to a commit */
+  setHead(hash: CommitHash | null) {
+    return Result.fromAsync(async () => {
+      if (hash === null) {
+        this._head = null;
+        return Result.ok();
+      }
+      const res = await this.getCommit(hash);
+      if (!res.ok) return res;
+      if (res.value === null)
+        return Result.error(new CommitNotFoundError(hash));
+      this._head = res.value;
+      return Result.ok();
+    });
+  }
+
   /**
    * Add a bookmark
    *
@@ -187,9 +203,7 @@ export class Versie<M extends MetaData> {
   }
 
   /**
-   * Checkout a `Bookmark` or `Commit`
-   *
-   * Checking out a `Commit` will set the active `Bookmark` to that commit
+   * Set head to `hash` and return a `Checkout`
    * */
   checkout(
     hash: CommitHash,
