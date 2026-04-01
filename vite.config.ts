@@ -12,7 +12,7 @@ export default defineConfig({
       fileName: (format) => `versie.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
-      external: ["fast-diff", "lru-cache", "pako", "typescript-result", "zod"],
+      external: ["fast-diff", "lru-cache", "typescript-result", "zod"],
     },
     sourcemap: true,
   },

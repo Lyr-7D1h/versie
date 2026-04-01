@@ -1,5 +1,4 @@
 import { LRUCache } from 'lru-cache'
-import pako from 'pako'
 import diff from 'fast-diff'
 import { BloomFilter } from './BloomFilter'
 import { BlobHash, MetaData } from './Commit'
@@ -47,7 +46,7 @@ export class BlobStorage<M extends MetaData> {
     return Result.fromAsync(async () => {
       const raw = await this.storage.getDelta(hash)
       if (raw == null) return Result.ok(null)
-      const delta = pako.inflate(raw)
+      const delta = await inflateBytes(raw)
       const { base: baseHash, ops } = dedeltize(delta)
       const baseResult = await this.get(baseHash)
       if (!baseResult.ok) return baseResult
@@ -79,7 +78,7 @@ export class BlobStorage<M extends MetaData> {
   private async getBlobContent(hash: BlobHash): Promise<string | null> {
     const raw = await this.storage.getBlob(hash)
     if (raw === null) return null
-    const bytes = pako.inflate(raw)
+    const bytes = await inflateBytes(raw)
     const decoder = new TextDecoder()
     return decoder.decode(bytes)
   }
@@ -95,7 +94,7 @@ export class BlobStorage<M extends MetaData> {
     // if delta doesnt exist return 0
     const raw = await this.storage.getDelta(hash)
     if (raw === null) return 0
-    const delta = pako.inflate(raw)
+    const delta = await inflateBytes(raw)
 
     // get count from base and add 1
     const base = Sha256Hash.fromBuffer(delta.slice(0, 32)) as BlobHash
@@ -129,17 +128,52 @@ export class BlobStorage<M extends MetaData> {
           // If estimated change is too large (>80% different), skip deltize
           if (changeEstimate < 0.8) {
             const deltaValue = deltize(base, baseValue, value)
-            await this.storage.setDelta(hash, pako.deflate(deltaValue))
+            await this.storage.setDelta(hash, await deflateBytes(deltaValue))
             return Result.ok()
           }
         }
       }
 
       const encoder = new TextEncoder()
-      await this.storage.setBlob(hash, pako.deflate(encoder.encode(value)))
+      await this.storage.setBlob(
+        hash,
+        await deflateBytes(encoder.encode(value)),
+      )
       return Result.ok()
     })
   }
+}
+
+async function deflateBytes(data: Uint8Array): Promise<Uint8Array> {
+  return await compressBytes(data, 'deflate')
+}
+
+async function inflateBytes(data: Uint8Array): Promise<Uint8Array> {
+  return await decompressBytes(data, 'deflate')
+}
+
+async function compressBytes(
+  data: Uint8Array,
+  format: CompressionFormat,
+): Promise<Uint8Array> {
+  const normalized = Uint8Array.from(data)
+  const compressed = await new Response(
+    new Blob([normalized]).stream().pipeThrough(new CompressionStream(format)),
+  ).arrayBuffer()
+  return new Uint8Array(compressed)
+}
+
+async function decompressBytes(
+  data: Uint8Array,
+  format: CompressionFormat,
+): Promise<Uint8Array> {
+  const normalized = Uint8Array.from(data)
+  const decompressed = await new Response(
+    new Blob([normalized])
+      .stream()
+      .pipeThrough(new DecompressionStream(format)),
+  ).arrayBuffer()
+  return new Uint8Array(decompressed)
 }
 
 /**

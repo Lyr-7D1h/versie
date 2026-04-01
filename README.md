@@ -8,7 +8,7 @@ Versie ("version" in Dutch) provides git-like version control — commits, blobs
 
 - **Commits & history** — create commits with arbitrary metadata, traverse history, and check out any point in time
 - **Bookmarks** — named pointers to commits (analogous to git branches/tags)
-- **Delta compression** — blobs are stored as compressed deltas using `fast-diff` and `pako`, with a Bloom filter to speed up delta lookups and an LRU cache to reduce redundant decompression
+- **Delta compression** — blobs are stored as compressed deltas using `fast-diff` and the native `CompressionStream`/`DecompressionStream` APIs, with a Bloom filter to speed up delta lookups and an LRU cache to reduce redundant decompression
 - **Pluggable storage** — implement the `Storage<M>` interface to use any backend; `IndexDBStorage` is provided out of the box
 - **Import / export** — serialize and restore the full repository state
 
