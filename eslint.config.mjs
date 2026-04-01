@@ -1,8 +1,8 @@
-import eslint from '@eslint/js';
-import tseslint from 'typescript-eslint';
+import eslint from "@eslint/js";
+import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ['dist/**'] },
+  { ignores: ["dist/**"] },
   eslint.configs.recommended,
   tseslint.configs.strictTypeChecked,
   {
@@ -14,16 +14,23 @@ export default tseslint.config(
     },
     rules: {
       // Respect the _prefix convention for intentionally unused parameters
-      '@typescript-eslint/no-unused-vars': ['error', {
-        args: 'all',
-        argsIgnorePattern: '^_',
-        caughtErrorsIgnorePattern: '^_',
-        varsIgnorePattern: '^_',
-      }],
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          args: "all",
+          argsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+        },
+      ],
       // Numbers are valid in template literals
-      '@typescript-eslint/restrict-template-expressions': ['error', {
-        allowNumber: true,
-      }],
+      "@typescript-eslint/restrict-template-expressions": [
+        "error",
+        {
+          allowNumber: true,
+        },
+      ],
+      "@typescript-eslint/no-non-null-assertion": "off",
     },
   },
 );

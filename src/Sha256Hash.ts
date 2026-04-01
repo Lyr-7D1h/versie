@@ -5,14 +5,14 @@ export const sha256HashSchema = z.string().transform((data, ctx) => {
     return Sha256Hash.fromHex(data)
   } catch (e) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: 'custom',
       message: `Failed to parse to hash ${(e as Error).toString()}`,
     })
     return z.NEVER
   }
 })
 
-export class Sha256Hash {
+export class Sha256Hash extends Uint8Array {
   static fromBuffer(hash: Uint8Array<ArrayBuffer>) {
     return new Sha256Hash(hash)
   }
@@ -46,16 +46,18 @@ export class Sha256Hash {
     return new Sha256Hash(bytes)
   }
 
-  private constructor(readonly buffer: Uint8Array<ArrayBuffer>) {}
+  private constructor(buffer: Uint8Array<ArrayBuffer>) {
+    super(buffer)
+  }
 
   /** convert hash buffer to hexidecimal string */
   toHex() {
-    const hashArray = Array.from(new Uint8Array(this.buffer))
+    const hashArray = Array.from(this)
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
   }
 
   toBase64(omitPadding = false) {
-    const b64 = btoa(String.fromCharCode(...this.buffer))
+    const b64 = btoa(String.fromCharCode(...this))
     return omitPadding
       ? b64.slice(0, -1) // sha256 is always 32 bytes, meaning 32 * 8 = 256/6 = ~43 base64 characters, so there is always 1 '='
       : b64
@@ -67,11 +69,8 @@ export class Sha256Hash {
   }
 
   compare(other: Sha256Hash): boolean {
-    const thisArray = new Uint8Array(this.buffer)
-    const otherArray = new Uint8Array(other.buffer)
-
-    for (let i = 0; i < thisArray.length; i++) {
-      if (thisArray[i] !== otherArray[i]) return false
+    for (let i = 0; i < this.length; i++) {
+      if (this[i] !== other[i]) return false
     }
     return true
   }

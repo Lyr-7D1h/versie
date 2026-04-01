@@ -241,7 +241,7 @@ class MockIDBDatabase implements IDBDatabase {
   onerror: ((this: IDBDatabase, ev: Event) => any) | null = null
 
   onversionchange: // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ((this: IDBDatabase, ev: IDBVersionChangeEvent) => any) | null = null
+    ((this: IDBDatabase, ev: IDBVersionChangeEvent) => any) | null = null
 
   // Shared storage for all object stores
   private readonly storeData: Map<string, Map<string, Uint8Array>> = new Map()
@@ -283,11 +283,11 @@ class MockStorage implements Storage<undefined> {
   }
 
   async getBlob(id: BlobHash): Promise<Uint8Array | null> {
-    return await this.getFromStore('blobs', id.buffer)
+    return await this.getFromStore('blobs', id)
   }
 
   async getDelta(id: BlobHash): Promise<Uint8Array | null> {
-    return await this.getFromStore('delta', id.buffer)
+    return await this.getFromStore('delta', id)
   }
 
   async setBookmark(_bookmark: Bookmark): Promise<void> {}
@@ -295,11 +295,11 @@ class MockStorage implements Storage<undefined> {
   async setCommit(_commit: Commit<undefined>): Promise<void> {}
 
   async setBlob(id: BlobHash, value: Uint8Array): Promise<void> {
-    await this.putToStore('blobs', id.buffer, value)
+    await this.putToStore('blobs', id, value)
   }
 
   async setDelta(id: BlobHash, value: Uint8Array): Promise<void> {
-    await this.putToStore('delta', id.buffer, value)
+    await this.putToStore('delta', id, value)
   }
 
   async removeBookmark(_id: string): Promise<void> {}

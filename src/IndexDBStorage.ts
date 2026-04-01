@@ -163,26 +163,26 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     return this._get(BOOKMARKS_STORE, id) as Promise<JsonValue>
   }
   getCommit(id: CommitHash): Promise<JsonValue | null> {
-    return this._get(COMMITS_STORE, id.buffer) as Promise<JsonValue>
+    return this._get(COMMITS_STORE, id) as Promise<JsonValue>
   }
   getDelta(id: BlobHash): Promise<Uint8Array | null> {
-    return this._get(DELTA_STORE, id.buffer) as Promise<Uint8Array | null>
+    return this._get(DELTA_STORE, id) as Promise<Uint8Array | null>
   }
   getBlob(id: BlobHash): Promise<Uint8Array | null> {
-    return this._get(BLOB_STORE, id.buffer) as Promise<Uint8Array | null>
+    return this._get(BLOB_STORE, id) as Promise<Uint8Array | null>
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
   setCommit(commit: Commit<M>): Promise<void> {
-    return this._set(COMMITS_STORE, commit.hash.buffer, commit.toJson())
+    return this._set(COMMITS_STORE, commit.hash, commit.toJson())
   }
   setDelta(id: BlobHash, value: Uint8Array): Promise<void> {
-    return this._set(DELTA_STORE, id.buffer, value)
+    return this._set(DELTA_STORE, id, value)
   }
   setBlob(id: BlobHash, value: Uint8Array): Promise<void> {
-    return this._set(BLOB_STORE, id.buffer, value)
+    return this._set(BLOB_STORE, id, value)
   }
 
   removeBookmark(id: string): Promise<void> {
@@ -258,7 +258,10 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       const store = trans.objectStore(storeName)
       const req = store.get(query)
       req.onsuccess = () => {
-        if (typeof req.result === 'undefined') return resolve(null)
+        if (typeof req.result === 'undefined') {
+          resolve(null)
+          return
+        }
         resolve(req.result as JsonValue)
       }
       req.onerror = (_e) => {
@@ -306,7 +309,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     ) => {
       for (const entry of entries) {
         const key = isKeyBinary
-          ? Sha256Hash.fromBase64(entry.key, true).buffer
+          ? Sha256Hash.fromBase64(entry.key, true)
           : entry.key
         const value = isValueBinary
           ? decompressData(entry.value as string)
@@ -322,7 +325,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
     }
 
-    return await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       trans.oncomplete = () => {
         resolve()
       }
