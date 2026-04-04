@@ -1,40 +1,41 @@
-import { Commit, CommitHash, BlobHash, MetaData } from "./Commit";
+import { Commit, CommitHash, BlobHash, MetaData } from './Commit'
 import {
   Bookmark,
   Bookmarks,
   BookmarkNotFoundError,
   BookmarkAlreadyExistsError,
-} from "./Bookmarks";
-export { BookmarkAlreadyExistsError } from "./Bookmarks";
-import { Storage } from "./Storage";
-import { AsyncResult, Result } from "typescript-result";
-import { ParseError, StorageError, VersieStorage } from "./VersieStorage";
-import { Sha256Hash } from "./Sha256Hash";
-import { VersieError } from "./VersieError";
+} from './Bookmarks'
+export { BookmarkAlreadyExistsError } from './Bookmarks'
+import { Storage } from './Storage'
+import { AsyncResult, Result } from 'typescript-result'
+import { ParseError, StorageError, VersieStorage } from './VersieStorage'
+import { Sha256Hash } from './Sha256Hash'
+import { VersieError } from './VersieError'
+import { DeltizingError } from './Deltizer'
 
 export type Checkout<M extends MetaData> = {
-  commit: Commit<M>;
-  data: string;
-};
+  commit: Commit<M>
+  data: string
+}
 
 export type HistoryItem<M extends MetaData> = {
-  commit: Commit<M>;
-  bookmarks: Bookmark[];
-};
+  commit: Commit<M>
+  bookmarks: Bookmark[]
+}
 
 export class CommitNotFoundError extends VersieError {
-  readonly type = "commit-not-found";
+  readonly type = 'commit-not-found'
 
   constructor(hash: CommitHash) {
-    super(`Commit '${hash.toHex()}' not found`);
+    super(`Commit '${hash.toHex()}' not found`)
   }
 }
 
 export class BlobNotFoundError extends VersieError {
-  readonly type = "blob-not-found";
+  readonly type = 'blob-not-found'
 
   constructor(hash: BlobHash) {
-    super(`Blob '${hash.toHex()}' not found`);
+    super(`Blob '${hash.toHex()}' not found`)
   }
 }
 
@@ -45,37 +46,36 @@ export class Versie<M extends MetaData> {
     storage: Storage<M>,
     parseMetadata: (raw: unknown) => M,
   ) {
-    const vcsStorage = new VersieStorage(storage, parseMetadata);
-    const bookmarks = await Bookmarks.create(vcsStorage);
-    if (!bookmarks.ok) return bookmarks;
+    const vcsStorage = new VersieStorage(storage, parseMetadata)
+    const bookmarks = await Bookmarks.create(vcsStorage)
+    if (!bookmarks.ok) return bookmarks
 
-    return Result.ok(new Versie<M>(vcsStorage, bookmarks.value));
+    return Result.ok(new Versie<M>(vcsStorage, bookmarks.value))
   }
 
-  private _head: Commit<M> | null = null;
+  private _head: Commit<M> | null = null
   private constructor(
     private readonly storage: VersieStorage<M>,
     private readonly _bookmarks: Bookmarks<M>,
   ) {}
 
   get head() {
-    return this._head;
+    return this._head
   }
 
   /** Set head to point to a commit */
   setHead(hash: CommitHash | null) {
     return Result.fromAsync(async () => {
       if (hash === null) {
-        this._head = null;
-        return Result.ok();
+        this._head = null
+        return Result.ok()
       }
-      const res = await this.getCommit(hash);
-      if (!res.ok) return res;
-      if (res.value === null)
-        return Result.error(new CommitNotFoundError(hash));
-      this._head = res.value;
-      return Result.ok();
-    });
+      const res = await this.getCommit(hash)
+      if (!res.ok) return res
+      if (res.value === null) return Result.error(new CommitNotFoundError(hash))
+      this._head = res.value
+      return Result.ok()
+    })
   }
 
   /**
@@ -84,31 +84,31 @@ export class Versie<M extends MetaData> {
    * returns null if already exists
    * */
   addBookmark(bookmark: Bookmark) {
-    return this._bookmarks.add(bookmark);
+    return this._bookmarks.add(bookmark)
   }
 
   setBookmarkCommit(name: string, commit: CommitHash) {
-    return this._bookmarks.setCommit(name, commit);
+    return this._bookmarks.setCommit(name, commit)
   }
 
   bookmarkLookup(commit: CommitHash) {
-    return this._bookmarks.bookmarkLookup(commit);
+    return this._bookmarks.bookmarkLookup(commit)
   }
 
   removeBookmark(name: string) {
-    return this._bookmarks.remove(name);
+    return this._bookmarks.remove(name)
   }
 
   renameBookmark(oldName: string, newName: string) {
-    return this._bookmarks.rename(oldName, newName);
+    return this._bookmarks.rename(oldName, newName)
   }
 
   getAllBookmarks() {
-    return this._bookmarks.getAllBookmarks();
+    return this._bookmarks.getAllBookmarks()
   }
 
   getBookmark(name: string) {
-    return this._bookmarks.getBookmark(name);
+    return this._bookmarks.getBookmark(name)
   }
 
   /**
@@ -121,36 +121,36 @@ export class Versie<M extends MetaData> {
   ): AsyncResult<HistoryItem<M>[], ParseError | StorageError> {
     return Result.fromAsync(async () => {
       /** PERF: Make more efficient by querying commits by same author around that time and caching those commits */
-      let next: Commit<M> | null = start ?? this._head;
-      const history: HistoryItem<M>[] = [];
+      let next: Commit<M> | null = start ?? this._head
+      const history: HistoryItem<M>[] = []
       for (let i = 0; i < n; i++) {
-        if (next === null) break;
-        const bookmarks = this._bookmarks.bookmarkLookup(next.hash) ?? [];
-        history.push({ commit: next, bookmarks });
+        if (next === null) break
+        const bookmarks = this._bookmarks.bookmarkLookup(next.hash) ?? []
+        history.push({ commit: next, bookmarks })
 
-        if (typeof next.parent === "undefined") break;
-        const parentResult = await this.storage.getCommit(next.parent);
+        if (typeof next.parent === 'undefined') break
+        const parentResult = await this.storage.getCommit(next.parent)
         if (!parentResult.ok) {
-          return Result.error(parentResult.error);
+          return Result.error(parentResult.error)
         }
         if (parentResult.value === null) {
-          break;
+          break
         }
-        next = parentResult.value;
+        next = parentResult.value
       }
-      return Result.ok(history);
-    });
+      return Result.ok(history)
+    })
   }
 
   getCommit(hash: CommitHash) {
-    return this.storage.getCommit(hash);
+    return this.storage.getCommit(hash)
   }
 
   /**
    * Get all commits from storage
    */
   getAllCommits() {
-    return this.storage.getAllCommits();
+    return this.storage.getAllCommits()
   }
 
   /**
@@ -160,15 +160,18 @@ export class Versie<M extends MetaData> {
    * */
   commit(
     /** The value to be stored and comitted */
-    value: string,
+    data: string,
     /** Metadata related to this commit */
     metadata: M,
   ): AsyncResult<
     Commit<M> | null,
-    BookmarkNotFoundError | StorageError | BookmarkAlreadyExistsError
+    | BookmarkNotFoundError
+    | StorageError
+    | BookmarkAlreadyExistsError
+    | DeltizingError
   > {
     return Result.fromAsync(async () => {
-      const blob = (await Sha256Hash.create(value)) as BlobHash;
+      const blob = (await Sha256Hash.create(data)) as BlobHash
       // don't commit if nothing changed
       if (
         this._head &&
@@ -177,7 +180,7 @@ export class Versie<M extends MetaData> {
           ? this._head.metadata.compare(metadata)
           : true)
       ) {
-        return Result.ok(null);
+        return Result.ok(null)
       }
 
       const commit = await Commit.create(
@@ -185,21 +188,14 @@ export class Versie<M extends MetaData> {
         new Date(),
         metadata,
         this._head ? this._head.hash : undefined,
-      );
+      )
 
-      const setCommitResult = await this.storage.setCommit(commit);
-      if (!setCommitResult.ok) return setCommitResult;
+      const setCommitResult = await this.storage.setCommit(commit, data)
+      if (!setCommitResult.ok) return setCommitResult
 
-      const setBlobResult = await this.storage.setBlob(
-        value,
-        commit.blob,
-        this._head?.blob,
-      );
-      if (!setBlobResult.ok) return setBlobResult;
-
-      this._head = commit;
-      return Result.ok(commit);
-    });
+      this._head = commit
+      return Result.ok(commit)
+    })
   }
 
   /**
@@ -215,46 +211,28 @@ export class Versie<M extends MetaData> {
     | BlobNotFoundError
     | BookmarkNotFoundError
     | BookmarkAlreadyExistsError
+    | DeltizingError
   > {
     return Result.fromAsync(async () => {
       let commit =
         hash === this._head?.hash // use head if it matches to prevent storage call
           ? this._head
-          : null;
+          : null
       if (commit === null) {
-        const commitResult = await this.storage.getCommit(hash);
-        if (!commitResult.ok) return commitResult;
-        commit = commitResult.value;
+        const commitResult = await this.storage.getCommit(hash)
+        if (!commitResult.ok) return commitResult
+        commit = commitResult.value
       }
-      if (commit === null) return Result.error(new CommitNotFoundError(hash));
-      const blobResult = await this.storage.getBlob(commit.blob);
-      if (!blobResult.ok) return blobResult;
+      if (commit === null) return Result.error(new CommitNotFoundError(hash))
+      const blobResult = await this.storage.getCommitData(commit.blob)
+      if (!blobResult.ok) return blobResult
 
-      const data = blobResult.value;
-      if (data === null)
-        return Result.error(new BlobNotFoundError(commit.blob));
+      const data = blobResult.value
+      if (data === null) return Result.error(new BlobNotFoundError(commit.blob))
 
-      this._head = commit;
+      this._head = commit
 
-      return Result.ok({ commit, data });
-    });
-  }
-
-  /**
-   * Import data into vcs
-   *
-   * NOTE: Skips inner validation due to performance overhead
-   */
-  import(data: unknown) {
-    return this.storage.import(data);
-  }
-
-  /**
-   * Export data into vcs
-   *
-   * NOTE: Skips inner validation due to performance overhead
-   */
-  export() {
-    return this.storage.export();
+      return Result.ok({ commit, data })
+    })
   }
 }

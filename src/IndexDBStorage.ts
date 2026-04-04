@@ -1,18 +1,14 @@
 import { AsyncResult, Result } from 'typescript-result'
-import { JsonValue, Storage, VCSImport } from './Storage'
+import { JsonValue, Storage } from './Storage'
 import { BlobHash, Commit, CommitHash, MetaData } from './Commit'
 import { Bookmark } from './Bookmarks'
 import { Sha256Hash } from './Sha256Hash'
 
 export const COMMITS_STORE = 'commits'
 export const BLOB_STORE = 'blobs'
-export const DELTA_STORE = 'delta'
 export const BOOKMARKS_STORE = 'bookmarks'
 
 const VERSION = 1
-type StorageImportEntry = { key: string; value: unknown }
-type StorageExportEntry = { key: string; value: JsonValue }
-type StorageRawExportEntry = { key: string; value: unknown }
 
 function unknownErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
@@ -50,7 +46,6 @@ export type IndexDBStorageCreateError =
 function migrations(oldVersion: number, db: IDBDatabase) {
   if (oldVersion < 1) {
     db.createObjectStore(BLOB_STORE)
-    db.createObjectStore(DELTA_STORE)
 
     let os = db.createObjectStore(COMMITS_STORE)
     os.createIndex('blob', 'blob')
@@ -69,7 +64,7 @@ function migrations(oldVersion: number, db: IDBDatabase) {
 /** Entry point for fetching all data */
 export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   static create<M extends MetaData>(): AsyncResult<
-    { creagen: IndexDBStorage<M>; persisted: boolean },
+    { indexdb: IndexDBStorage<M>; persisted: boolean },
     IndexDBStorageCreateError
   > {
     return Result.fromAsync(async () => {
@@ -91,7 +86,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
 
       return await new Promise<
         Result<
-          { creagen: IndexDBStorage<M>; persisted: boolean },
+          { indexdb: IndexDBStorage<M>; persisted: boolean },
           IndexDBStorageOpenError | IndexDBStorageUpgradeError
         >
       >((resolve) => {
@@ -100,7 +95,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
 
         const resolveOnce = (
           value: Result<
-            { creagen: IndexDBStorage<M>; persisted: boolean },
+            { indexdb: IndexDBStorage<M>; persisted: boolean },
             IndexDBStorageOpenError | IndexDBStorageUpgradeError
           >,
         ) => {
@@ -116,7 +111,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         req.onsuccess = () => {
           resolveOnce(
             Result.ok({
-              creagen: new IndexDBStorage(req.result),
+              indexdb: new IndexDBStorage(req.result),
               persisted,
             }),
           )
@@ -167,24 +162,37 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   getCommit(id: CommitHash): Promise<JsonValue | null> {
     return this._get(COMMITS_STORE, id) as Promise<JsonValue>
   }
-  getDelta(id: BlobHash): Promise<Uint8Array | null> {
-    return this._get(DELTA_STORE, id) as Promise<Uint8Array | null>
-  }
-  getBlob(id: BlobHash): Promise<Uint8Array | null> {
-    return this._get(BLOB_STORE, id) as Promise<Uint8Array | null>
+  getCommitData(hash: BlobHash): Promise<Uint8Array> {
+    return this._get(BLOB_STORE, hash) as Promise<Uint8Array>
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
-  setCommit(commit: Commit<M>): Promise<void> {
-    return this._set(COMMITS_STORE, commit.hash, commit.toJson())
-  }
-  setDelta(id: BlobHash, value: Uint8Array): Promise<void> {
-    return this._set(DELTA_STORE, id, value)
-  }
-  setBlob(id: BlobHash, value: Uint8Array): Promise<void> {
-    return this._set(BLOB_STORE, id, value)
+  async setCommit(commit: Commit<M>, data: Uint8Array): Promise<void> {
+    const trans = this.db.transaction([COMMITS_STORE, BLOB_STORE], 'readwrite')
+    await new Promise<void>((resolve, reject) => {
+      trans.oncomplete = () => {
+        resolve()
+      }
+      trans.onerror = () => {
+        reject(new Error(`failed to set commit: ${trans.error?.message ?? ''}`))
+      }
+
+      const commitsStore = trans.objectStore(COMMITS_STORE)
+      const commitReq = commitsStore.put(commit.toJson(), commit.hash)
+      commitReq.onerror = () => {
+        reject(
+          new Error(`failed to set commit: ${commitReq.error?.message ?? ''}`),
+        )
+      }
+
+      const blobsStore = trans.objectStore(BLOB_STORE)
+      const blobReq = blobsStore.put(data, commit.blob)
+      blobReq.onerror = () => {
+        reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
+      }
+    })
   }
 
   removeBookmark(id: string): Promise<void> {
@@ -197,11 +205,8 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   getAllCommits(): Promise<JsonValue[]> {
     return this._getAll(COMMITS_STORE)
   }
-  getAllBlobs(): Promise<JsonValue[]> {
-    return this._getAll(BLOB_STORE)
-  }
-  getAllDeltas(): Promise<JsonValue[]> {
-    return this._getAll(DELTA_STORE)
+  getAllCommitData(): Promise<Uint8Array[]> {
+    return this._getAll(BLOB_STORE) as unknown as Promise<Uint8Array[]>
   }
 
   private async _set(storeName: string, id: IDBValidKey, value: unknown) {
@@ -292,43 +297,35 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     })
   }
 
-  /** import indexdb data */
-  async import(data: VCSImport) {
+  /**
+   * Import indexdb data
+   *
+   * NOTE: Skips inner validation due to performance overhead
+   * */
+  async import(data: IndexdbImport) {
     if (data.version !== VERSION) {
       throw Error('Import version mismatch')
     }
-
-    const [blobs, delta] = await Promise.all([
-      Promise.all(
-        data.blobs.map(async (entry) => ({
-          key: entry.key,
-          value: await decompressData(entry.value as string),
-        })),
-      ),
-      Promise.all(
-        data.delta.map(async (entry) => ({
-          key: entry.key,
-          value: await decompressData(entry.value as string),
-        })),
-      ),
-    ])
-
     const trans = this.db.transaction(
-      [COMMITS_STORE, BLOB_STORE, DELTA_STORE, BOOKMARKS_STORE],
+      [COMMITS_STORE, BLOB_STORE, BOOKMARKS_STORE],
       'readwrite',
     )
 
     const writeEntries = (
       store: IDBObjectStore,
-      entries: StorageImportEntry[],
+      entries: Array<{ key: string; value: JsonValue }>,
       isKeyBinary: boolean,
+      isValueBinary: boolean,
       reject: (reason?: unknown) => void,
     ) => {
       for (const entry of entries) {
         const key = isKeyBinary
           ? Sha256Hash.fromBase64(entry.key, true)
           : entry.key
-        const req = store.put(entry.value, key)
+        const value = isValueBinary
+          ? dataFromString(entry.value as string)
+          : entry.value
+        const req = store.put(value, key)
         req.onerror = () => {
           reject(
             new Error(
@@ -351,160 +348,114 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
 
       const commitsStore = trans.objectStore(COMMITS_STORE)
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const deltaStore = trans.objectStore(DELTA_STORE)
       const bookmarksStore = trans.objectStore(BOOKMARKS_STORE)
 
-      writeEntries(commitsStore, data.commits, true, reject)
-      writeEntries(blobsStore, blobs, true, reject)
-      writeEntries(deltaStore, delta, true, reject)
-      writeEntries(bookmarksStore, data.bookmarks, false, reject)
+      writeEntries(commitsStore, data.commits, true, false, reject)
+      writeEntries(blobsStore, data.blobs, true, true, reject)
+      writeEntries(bookmarksStore, data.bookmarks, false, false, reject)
     })
   }
 
-  /** export indexdb data */
-  async export(): Promise<VCSImport> {
-    const collectStoreEntries = async (
-      storeName: string,
-    ): Promise<StorageRawExportEntry[]> => {
-      const t = this.db.transaction(storeName, 'readonly')
-      return await new Promise<StorageRawExportEntry[]>((resolve, reject) => {
-        t.onerror = (_e) => {
-          reject(
-            new Error(`Export transaction failed: ${t.error?.message ?? ''}`),
-          )
-        }
-        const store = t.objectStore(storeName)
-        const req = store.openCursor()
-        const results: StorageRawExportEntry[] = []
+  /**
+   * export indexdb data
+   *
+   * NOTE: Skips inner validation due to performance overhead
+   * */
+  async export(): Promise<IndexdbImport> {
+    const [commits, blobs, bookmarks] = await Promise.all(
+      [COMMITS_STORE, BLOB_STORE, BOOKMARKS_STORE].map((storeName) => {
+        const t = this.db.transaction(storeName, 'readonly')
+        return new Promise<Array<{ key: string; value: JsonValue }>>(
+          (resolve, reject) => {
+            t.onerror = (_e) => {
+              reject(
+                new Error(
+                  `Export transaction failed: ${t.error?.message ?? ''}`,
+                ),
+              )
+            }
+            const store = t.objectStore(storeName)
+            const req = store.openCursor()
+            const results: Array<{ key: string; value: JsonValue }> = []
 
-        req.onsuccess = () => {
-          const cursor = req.result
-          if (cursor) {
-            // Convert key to string
-            let keyStr: string
-            const key = cursor.key
+            req.onsuccess = () => {
+              const cursor = req.result
+              if (cursor) {
+                // Convert key to string
+                let keyStr: string
+                const key = cursor.key
 
-            const isBinaryKeyStore =
-              storeName === COMMITS_STORE ||
-              storeName === BLOB_STORE ||
-              storeName === DELTA_STORE
+                const isBinaryKeyStore =
+                  storeName === COMMITS_STORE || storeName === BLOB_STORE
 
-            const isBinaryValueStore =
-              storeName === BLOB_STORE || storeName === DELTA_STORE
+                const isBinaryValueStore = storeName === BLOB_STORE
 
-            if (isBinaryKeyStore) {
-              const keyBytes = key as Uint8Array
-              const normalizedKeyBytes = Uint8Array.from(keyBytes)
-              keyStr = Sha256Hash.fromBuffer(normalizedKeyBytes).toBase64(true)
-            } else if (typeof key === 'string') {
-              keyStr = key
-            } else if (typeof key === 'number') {
-              keyStr = key.toString()
-            } else {
-              keyStr = JSON.stringify(key)
+                if (isBinaryKeyStore) {
+                  // cursor.key for binary stores is returned as ArrayBuffer per IDB spec
+                  const normalizedKeyBytes = new Uint8Array(key as ArrayBuffer)
+                  keyStr =
+                    Sha256Hash.fromBuffer(normalizedKeyBytes).toBase64(true)
+                } else if (typeof key === 'string') {
+                  keyStr = key
+                } else if (typeof key === 'number') {
+                  keyStr = key.toString()
+                } else {
+                  keyStr = JSON.stringify(key)
+                }
+
+                results.push({
+                  key: keyStr,
+                  value: isBinaryValueStore
+                    ? (dataToString(cursor.value as Uint8Array) as JsonValue)
+                    : (cursor.value as JsonValue),
+                })
+                cursor.continue()
+              } else {
+                // No more entries
+                resolve(results)
+              }
             }
 
-            results.push({
-              key: keyStr,
-              value: isBinaryValueStore
-                ? Uint8Array.from(cursor.value as Uint8Array)
-                : (cursor.value as JsonValue),
-            })
-            cursor.continue()
-          } else {
-            // No more entries
-            resolve(results)
-          }
-        }
-
-        req.onerror = (_e) => {
-          reject(new Error(`Export failed ${req.error?.message ?? ''}`))
-        }
-      })
-    }
-
-    const [rawCommits, sourceBlobs, sourceDeltas, rawBookmarks] =
-      await Promise.all([
-      collectStoreEntries(COMMITS_STORE),
-      collectStoreEntries(BLOB_STORE),
-      collectStoreEntries(DELTA_STORE),
-      collectStoreEntries(BOOKMARKS_STORE),
-      ])
-
-    const [blobs, delta] = await Promise.all([
-      Promise.all(
-        sourceBlobs.map(async (entry) => ({
-          key: entry.key,
-          value: (await compressData(
-            entry.value as Uint8Array<ArrayBufferLike>,
-          )) as JsonValue,
-        })),
-      ),
-      Promise.all(
-        sourceDeltas.map(async (entry) => ({
-          key: entry.key,
-          value: (await compressData(
-            entry.value as Uint8Array<ArrayBufferLike>,
-          )) as JsonValue,
-        })),
-      ),
-    ])
-
-    const commits = rawCommits as StorageExportEntry[]
-    const bookmarks = rawBookmarks as StorageExportEntry[]
+            req.onerror = (_e) => {
+              reject(new Error(`Export failed ${req.error?.message ?? ''}`))
+            }
+          },
+        )
+      }),
+    )
 
     return {
       version: VERSION,
-      commits,
-      blobs,
-      delta,
-      bookmarks,
+      commits: commits!,
+      blobs: blobs!,
+      bookmarks: bookmarks!,
     }
   }
 }
 
-async function compressData(value: Uint8Array<ArrayBufferLike>): Promise<string> {
-  const compressed = await compressBytes(value, 'gzip')
+function dataToString(value: Uint8Array): string {
   const chunkSize = 0x8000
   let binary = ''
-  for (let i = 0; i < compressed.length; i += chunkSize) {
-    const chunk = compressed.subarray(i, i + chunkSize)
+  for (let i = 0; i < value.length; i += chunkSize) {
+    const chunk = value.subarray(i, i + chunkSize)
     binary += String.fromCharCode(...chunk)
   }
   return btoa(binary)
 }
 
-async function decompressData(value: string): Promise<Uint8Array> {
+function dataFromString(value: string): Uint8Array {
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i)
   }
-  return await decompressBytes(bytes, 'gzip')
+  return bytes
 }
 
-async function compressBytes(
-  data: Uint8Array<ArrayBufferLike>,
-  format: CompressionFormat,
-): Promise<Uint8Array> {
-  const normalized = new Uint8Array(data.byteLength)
-  normalized.set(data)
-  const compressed = await new Response(
-    new Blob([normalized]).stream().pipeThrough(new CompressionStream(format)),
-  ).arrayBuffer()
-  return new Uint8Array(compressed)
-}
-
-async function decompressBytes(
-  data: Uint8Array<ArrayBufferLike>,
-  format: CompressionFormat,
-): Promise<Uint8Array> {
-  const normalized = new Uint8Array(data.byteLength)
-  normalized.set(data)
-  const decompressed = await new Response(
-    new Blob([normalized])
-      .stream()
-      .pipeThrough(new DecompressionStream(format)),
-  ).arrayBuffer()
-  return new Uint8Array(decompressed)
+/** A generic type for importing and exporting data */
+export interface IndexdbImport {
+  version: number
+  bookmarks: Array<{ key: string; value: JsonValue }>
+  commits: Array<{ key: string; value: JsonValue }>
+  blobs: Array<{ key: string; value: JsonValue }>
 }

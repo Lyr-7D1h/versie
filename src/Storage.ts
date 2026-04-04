@@ -9,33 +9,21 @@ export type JsonValue =
 
 /** Generic storage interface for fetching and storing vcs objects */
 export interface Storage<M extends MetaData> {
-  getBookmark(id: string): Promise<JsonValue | null>
-  getCommit(id: CommitHash): Promise<JsonValue | null>
-  getBlob(id: BlobHash): Promise<Uint8Array | null>
-  getDelta(id: BlobHash): Promise<Uint8Array | null>
+  getBookmark(name: string): Promise<JsonValue | null>
+  getCommit(hash: CommitHash): Promise<JsonValue | null>
+  getCommitData(hash: BlobHash): Promise<Uint8Array>
 
   /** Overwrite existing bookmark or set a new one */
   setBookmark(bookmark: Bookmark): Promise<void>
-  setCommit(commit: Commit<M>): Promise<void>
-  setBlob(id: BlobHash, value: Uint8Array): Promise<void>
-  setDelta(id: BlobHash, value: Uint8Array): Promise<void>
+  /**
+   * Store a commit with its corresponding data
+   * commit.blob is always the hash of this data
+   * */
+  setCommit(commit: Commit<M>, data: Uint8Array): Promise<void>
 
-  removeBookmark(id: string): Promise<void>
+  removeBookmark(name: string): Promise<void>
 
-  getAllDeltas(): Promise<JsonValue[]>
-  getAllBlobs(): Promise<JsonValue[]>
+  getAllCommitData(): Promise<Uint8Array[]>
   getAllCommits(): Promise<JsonValue[]>
   getAllBookmarks(): Promise<JsonValue[]>
-
-  import(data: VCSImport): Promise<void>
-  export(): Promise<VCSImport>
-}
-
-/** A generic type for importing and exporting data */
-export interface VCSImport {
-  version: number
-  bookmarks: Array<{ key: string; value: JsonValue }>
-  commits: Array<{ key: string; value: JsonValue }>
-  blobs: Array<{ key: string; value: JsonValue }>
-  delta: Array<{ key: string; value: JsonValue }>
 }

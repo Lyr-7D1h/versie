@@ -1,61 +1,71 @@
 import { LRUCache } from 'lru-cache'
 import diff from 'fast-diff'
-import { BloomFilter } from './BloomFilter'
-import { BlobHash, MetaData } from './Commit'
+import { BlobHash } from './Commit'
 import { Sha256Hash } from './Sha256Hash'
-import { Storage } from './Storage'
 import { AsyncResult, Result } from 'typescript-result'
 import { VersieError } from './VersieError'
+import { StorageError } from './VersieStorage'
 
+const COMPRESSION_FORMAT = 'deflate'
+/**
+ * Cap the number of deltas that may be chained for a blob.
+ *
+ * Reconstructing a delta chain requires reading and applying each delta in sequence,
+ * so lookup cost grows with chain depth. Keeping this limit at 50 bounds worst-case
+ * reconstruction latency while still allowing enough chaining to benefit from delta
+ * compression in typical edit histories. Raising the limit may improve storage density
+ * for long revision sequences, but it also increases read-time CPU and decompression work.
+ */
 const MAX_DELTA_CHAIN_COUNT = 50
 
-export class BlobStorageError extends VersieError {
+/** An error that happened when trying to turn commit data in deltas */
+export class DeltizingError extends VersieError {
   readonly type = 'blob-storage-error'
 }
 
+type GetCommitData = (hash: BlobHash) => AsyncResult<Uint8Array, StorageError>
+
 // TODO: Run in web worker, diffing algorithm can be expensive
 /**
- * Blob storage, storing changes mostly in deltas but also as complete blobs
+ * Handle how blobs are stored by turning them into deltas or not
  */
-export class BlobStorage<M extends MetaData> {
-  constructor(private readonly storage: Storage<M>) {}
+export class Deltizer {
+  constructor(readonly getCommitData: GetCommitData) {}
 
-  deltaFilter: BloomFilter = BloomFilter.withTargetError(2000, 0.01)
-  get(hash: BlobHash): AsyncResult<string | null, BlobStorageError> {
+  reconstruct(
+    hash: BlobHash,
+  ): AsyncResult<string | null, DeltizingError | StorageError> {
     return Result.fromAsync(async () => {
-      const id = hash.toBase64()
-      if (this.deltaFilter.test(id)) {
-        return await this.reconstructFromDelta(hash)
+      const dataResult = await this.getCommitData(hash)
+      if (!dataResult.ok) return dataResult
+      const data = dataResult.value
+      const type = data[0]
+      if (type === 0x00) {
+        const decompressed = await decompressBytes(data.subarray(1))
+        return Result.ok(new TextDecoder().decode(decompressed))
+      } else if (type === 0x01) {
+        return this.reconstructFromDelta(hash, this.getCommitData)
       }
-      const blob = await this.getBlobContent(hash)
-      if (blob !== null) {
-        return Result.ok(blob)
-      }
-      const delta = await this.storage.getDelta(hash)
-      if (delta !== null) {
-        this.deltaFilter.add(id)
-        return await this.reconstructFromDelta(hash)
-      }
-      return Result.ok(null)
+      return Result.error(new DeltizingError(`Unknown data type: ${type}`))
     })
   }
 
   private reconstructFromDelta(
     hash: BlobHash,
-  ): AsyncResult<string | null, BlobStorageError> {
+    getCommitData: GetCommitData,
+  ): AsyncResult<string | null, DeltizingError | StorageError> {
     return Result.fromAsync(async () => {
-      const raw = await this.storage.getDelta(hash)
-      if (raw == null) return Result.ok(null)
-      const delta = await inflateBytes(raw)
+      const rawResult = await getCommitData(hash)
+      if (!rawResult.ok) return rawResult
+      const raw = rawResult.value
+      const delta = await decompressBytes(raw.subarray(1))
       const { base: baseHash, ops } = dedeltize(delta)
-      const baseResult = await this.get(baseHash)
+      const baseResult = await this.reconstruct(baseHash)
       if (!baseResult.ok) return baseResult
       const base = baseResult.value
       if (base == null) {
         return Result.error(
-          new BlobStorageError(
-            'Could not find base of delta ' + hash.toBase64(),
-          ),
+          new DeltizingError('Could not find base of delta ' + hash.toBase64()),
         )
       }
       let result = ''
@@ -75,14 +85,6 @@ export class BlobStorage<M extends MetaData> {
     })
   }
 
-  private async getBlobContent(hash: BlobHash): Promise<string | null> {
-    const raw = await this.storage.getBlob(hash)
-    if (raw === null) return null
-    const bytes = await inflateBytes(raw)
-    const decoder = new TextDecoder()
-    return decoder.decode(bytes)
-  }
-
   deltaChainCountCache = new LRUCache<BlobHash, number>({ max: 200 })
   /** Get delta chain count */
   private async getDeltaCount(hash: BlobHash): Promise<number> {
@@ -92,9 +94,10 @@ export class BlobStorage<M extends MetaData> {
     }
 
     // if delta doesnt exist return 0
-    const raw = await this.storage.getDelta(hash)
-    if (raw === null) return 0
-    const delta = await inflateBytes(raw)
+    const rawResult = await this.getCommitData(hash)
+    if (!rawResult.ok) return 0
+    const raw = rawResult.value
+    const delta = await decompressBytes(raw.subarray(1))
 
     // get count from base and add 1
     const base = Sha256Hash.fromBuffer(delta.slice(0, 32)) as BlobHash
@@ -104,20 +107,19 @@ export class BlobStorage<M extends MetaData> {
     return count
   }
 
-  /** Store a blob value and optionally with the base */
-  set(
-    hash: BlobHash,
+  /** Return a compressed blob or delta */
+  construct(
     value: string,
     base?: BlobHash,
-  ): AsyncResult<void, BlobStorageError> {
+  ): AsyncResult<Uint8Array, DeltizingError | StorageError> {
     return Result.fromAsync(async () => {
       if (base) {
-        const baseResult = await this.get(base)
+        const baseResult = await this.reconstruct(base)
         if (!baseResult.ok) return baseResult
         const baseValue = baseResult.value
         if (baseValue == null) {
           return Result.error(
-            new BlobStorageError(`Could not find base ${base.toSub()}`),
+            new DeltizingError(`Could not find base ${base.toSub()}`),
           )
         }
         const count = await this.getDeltaCount(base)
@@ -127,51 +129,43 @@ export class BlobStorage<M extends MetaData> {
 
           // If estimated change is too large (>80% different), skip deltize
           if (changeEstimate < 0.8) {
-            const deltaValue = deltize(base, baseValue, value)
-            await this.storage.setDelta(hash, await deflateBytes(deltaValue))
-            return Result.ok()
+            const delta = deltize(base, baseValue, value)
+            const compressedDelta = await compressBytes(delta)
+            const deltaBytes = new Uint8Array(1 + compressedDelta.length)
+            deltaBytes[0] = 0x01
+            deltaBytes.set(compressedDelta, 1)
+            return Result.ok(deltaBytes)
           }
         }
       }
 
       const encoder = new TextEncoder()
-      await this.storage.setBlob(
-        hash,
-        await deflateBytes(encoder.encode(value)),
-      )
-      return Result.ok()
+      const blob = encoder.encode(value)
+      const compressedBlob = await compressBytes(blob)
+      const blobBytes = new Uint8Array(1 + compressedBlob.length)
+      blobBytes[0] = 0x00
+      blobBytes.set(compressedBlob, 1)
+      return Result.ok(blobBytes)
     })
   }
 }
 
-async function deflateBytes(data: Uint8Array): Promise<Uint8Array> {
-  return await compressBytes(data, 'deflate')
-}
-
-async function inflateBytes(data: Uint8Array): Promise<Uint8Array> {
-  return await decompressBytes(data, 'deflate')
-}
-
-async function compressBytes(
-  data: Uint8Array,
-  format: CompressionFormat,
-): Promise<Uint8Array> {
+async function compressBytes(data: Uint8Array): Promise<Uint8Array> {
   const normalized = Uint8Array.from(data)
   const compressed = await new Response(
-    new Blob([normalized]).stream().pipeThrough(new CompressionStream(format)),
+    new Blob([normalized])
+      .stream()
+      .pipeThrough(new CompressionStream(COMPRESSION_FORMAT)),
   ).arrayBuffer()
   return new Uint8Array(compressed)
 }
 
-async function decompressBytes(
-  data: Uint8Array,
-  format: CompressionFormat,
-): Promise<Uint8Array> {
+async function decompressBytes(data: Uint8Array): Promise<Uint8Array> {
   const normalized = Uint8Array.from(data)
   const decompressed = await new Response(
     new Blob([normalized])
       .stream()
-      .pipeThrough(new DecompressionStream(format)),
+      .pipeThrough(new DecompressionStream(COMPRESSION_FORMAT)),
   ).arrayBuffer()
   return new Uint8Array(decompressed)
 }
