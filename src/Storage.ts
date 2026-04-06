@@ -6,24 +6,28 @@ export type JsonValue =
   | JsonPrimitive
   | (JsonValue | null)[]
   | { [key: string]: JsonValue | null }
+export type StorageCheckout = { commit: JsonValue; data: Uint8Array }
 
 /** Generic storage interface for fetching and storing vcs objects */
 export interface Storage<M extends MetaData> {
-  getBookmark(name: string): Promise<JsonValue | null>
+  /** Get a single commit */
   getCommit(hash: CommitHash): Promise<JsonValue | null>
-  getCommitData(hash: BlobHash): Promise<Uint8Array>
+  /** Get binary commit data exactly as how it was stored */
+  getCommitData(hash: BlobHash): Promise<Uint8Array | null>
+  /** Performance improved to get commit and commit data at same time */
+  getCheckout(hash: CommitHash): Promise<StorageCheckout | null>
 
-  /** Overwrite existing bookmark or set a new one */
-  setBookmark(bookmark: Bookmark): Promise<void>
   /**
    * Store a commit with its corresponding data
    * commit.blob is always the hash of this data
    * */
   setCommit(commit: Commit<M>, data: Uint8Array): Promise<void>
-
+  /** Overwrite existing bookmark or set a new one */
+  setBookmark(bookmark: Bookmark): Promise<void>
   removeBookmark(name: string): Promise<void>
 
-  getAllCommitData(): Promise<Uint8Array[]>
+  /** Get all commits */
   getAllCommits(): Promise<JsonValue[]>
+  /** Get all bookmarks */
   getAllBookmarks(): Promise<JsonValue[]>
 }

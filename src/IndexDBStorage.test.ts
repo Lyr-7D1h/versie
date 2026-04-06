@@ -33,6 +33,66 @@ async function createFilledStorage() {
   return { storage, commit, data, bookmark }
 }
 
+describe('IndexDBStorage commit and retrieve', () => {
+  test('setCommit stores commit metadata retrievable by hash', async () => {
+    const result = await IndexDBStorage.create<undefined>()
+    if (!result.ok) throw result.error
+    const { indexdb: storage } = result.value
+
+    const source = 'console.log("hello")'
+    const data = new TextEncoder().encode(source)
+    const blobHash = (await Sha256Hash.create(source)) as BlobHash
+    const createdOn = new Date(1_700_000_000_000)
+    const commit = await Commit.create(blobHash, createdOn, undefined)
+
+    await storage.setCommit(commit, data)
+
+    const retrieved = await storage.getCommit(commit.hash)
+    expect(retrieved).not.toBeNull()
+    expect(retrieved).toMatchObject({ blob: commit.blob.toHex() })
+  })
+
+  test('setCommit stores blob data retrievable by blob hash', async () => {
+    const result = await IndexDBStorage.create<undefined>()
+    if (!result.ok) throw result.error
+    const { indexdb: storage } = result.value
+
+    const source = 'console.log("hello")'
+    const data = new TextEncoder().encode(source)
+    const blobHash = (await Sha256Hash.create(source)) as BlobHash
+    const createdOn = new Date(1_700_000_000_000)
+    const commit = await Commit.create(blobHash, createdOn, undefined)
+
+    await storage.setCommit(commit, data)
+
+    const retrieved = await storage.getCommitData(commit.blob)
+    expect(retrieved).not.toBeNull()
+    expect(new Uint8Array(retrieved!)).toEqual(data)
+  })
+
+  test('getCommit returns null for unknown hash', async () => {
+    const result = await IndexDBStorage.create<undefined>()
+    if (!result.ok) throw result.error
+    const { indexdb: storage } = result.value
+
+    const unknownHash = (await Sha256Hash.create('nonexistent')) as BlobHash
+    expect(
+      await storage.getCommit(
+        unknownHash as unknown as import('./Commit').CommitHash,
+      ),
+    ).toBeNull()
+  })
+
+  test('getCommitData returns null for unknown blob hash', async () => {
+    const result = await IndexDBStorage.create<undefined>()
+    if (!result.ok) throw result.error
+    const { indexdb: storage } = result.value
+
+    const unknownHash = (await Sha256Hash.create('nonexistent')) as BlobHash
+    expect(await storage.getCommitData(unknownHash)).toBeNull()
+  })
+})
+
 describe('IndexDBStorage export', () => {
   test('exported object has the correct shape and counts', async () => {
     const { storage } = await createFilledStorage()
@@ -111,7 +171,7 @@ describe('IndexDBStorage import', () => {
     expect(retrievedCommit).toMatchObject({ blob: commit.blob.toHex() })
 
     const retrievedData = await target.getCommitData(commit.blob)
-    expect(new Uint8Array(retrievedData)).toEqual(data)
+    expect(new Uint8Array(retrievedData!)).toEqual(data)
   })
 
   test('imported bookmarks are retrievable', async () => {
@@ -131,7 +191,7 @@ describe('IndexDBStorage import', () => {
   })
 
   test('importing twice does not duplicate entries', async () => {
-    const { storage: source } = await createFilledStorage()
+    const { storage: source, commit } = await createFilledStorage()
     const exported = await source.export()
 
     freshIDB()
@@ -143,7 +203,7 @@ describe('IndexDBStorage import', () => {
     await target.import(exported)
 
     expect(await target.getAllCommits()).toHaveLength(1)
-    expect(await target.getAllCommitData()).toHaveLength(1)
+    expect(await target.getCommitData(commit.blob)).not.toBeNull()
     expect(await target.getAllBookmarks()).toHaveLength(1)
   })
 })
@@ -168,9 +228,9 @@ describe('IndexDBStorage round-trip', () => {
     const allCommits = await target.getAllCommits()
     expect(allCommits).toHaveLength(1)
 
-    const allBlobData = await target.getAllCommitData()
-    expect(allBlobData).toHaveLength(1)
-    expect(new Uint8Array(allBlobData[0]!)).toEqual(data)
+    const blobData = await target.getCommitData(commit.blob)
+    expect(blobData).not.toBeNull()
+    expect(new Uint8Array(blobData!)).toEqual(data)
 
     const allBookmarks = await target.getAllBookmarks()
     expect(allBookmarks).toHaveLength(1)

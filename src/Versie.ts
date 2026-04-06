@@ -169,6 +169,7 @@ export class Versie<M extends MetaData> {
     | StorageError
     | BookmarkAlreadyExistsError
     | DeltizingError
+    | BlobNotFoundError
   > {
     return Result.fromAsync(async () => {
       const blob = (await Sha256Hash.create(data)) as BlobHash

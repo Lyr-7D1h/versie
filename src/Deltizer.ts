@@ -5,6 +5,7 @@ import { Sha256Hash } from './Sha256Hash'
 import { AsyncResult, Result } from 'typescript-result'
 import { VersieError } from './VersieError'
 import { StorageError } from './VersieStorage'
+import { BlobNotFoundError } from './Versie'
 
 const COMPRESSION_FORMAT = 'deflate'
 /**
@@ -23,7 +24,9 @@ export class DeltizingError extends VersieError {
   readonly type = 'blob-storage-error'
 }
 
-type GetCommitData = (hash: BlobHash) => AsyncResult<Uint8Array, StorageError>
+type GetCommitData = (
+  hash: BlobHash,
+) => AsyncResult<Uint8Array, StorageError | BlobNotFoundError>
 
 // TODO: Run in web worker, diffing algorithm can be expensive
 /**
@@ -34,7 +37,10 @@ export class Deltizer {
 
   reconstruct(
     hash: BlobHash,
-  ): AsyncResult<string | null, DeltizingError | StorageError> {
+  ): AsyncResult<
+    string | null,
+    DeltizingError | StorageError | BlobNotFoundError
+  > {
     return Result.fromAsync(async () => {
       const dataResult = await this.getCommitData(hash)
       if (!dataResult.ok) return dataResult
@@ -53,7 +59,10 @@ export class Deltizer {
   private reconstructFromDelta(
     hash: BlobHash,
     getCommitData: GetCommitData,
-  ): AsyncResult<string | null, DeltizingError | StorageError> {
+  ): AsyncResult<
+    string | null,
+    DeltizingError | StorageError | BlobNotFoundError
+  > {
     return Result.fromAsync(async () => {
       const rawResult = await getCommitData(hash)
       if (!rawResult.ok) return rawResult
@@ -111,7 +120,10 @@ export class Deltizer {
   construct(
     value: string,
     base?: BlobHash,
-  ): AsyncResult<Uint8Array, DeltizingError | StorageError> {
+  ): AsyncResult<
+    Uint8Array,
+    DeltizingError | StorageError | BlobNotFoundError
+  > {
     return Result.fromAsync(async () => {
       if (base) {
         const baseResult = await this.reconstruct(base)

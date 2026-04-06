@@ -1,5 +1,5 @@
 import { AsyncResult, Result } from 'typescript-result'
-import { JsonValue, Storage } from './Storage'
+import { JsonValue, Storage, StorageCheckout } from './Storage'
 import { BlobHash, Commit, CommitHash, MetaData } from './Commit'
 import { Bookmark } from './Bookmarks'
 import { Sha256Hash } from './Sha256Hash'
@@ -156,14 +156,28 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
 
   private constructor(private readonly db: IDBDatabase) {}
 
-  getBookmark(id: string): Promise<JsonValue | null> {
-    return this._get(BOOKMARKS_STORE, id) as Promise<JsonValue>
+  getCommit(hash: CommitHash): Promise<JsonValue | null> {
+    return this._get(COMMITS_STORE, hash) as Promise<JsonValue>
   }
-  getCommit(id: CommitHash): Promise<JsonValue | null> {
-    return this._get(COMMITS_STORE, id) as Promise<JsonValue>
+  getCommitData(hash: BlobHash): Promise<Uint8Array | null> {
+    return this._get(BLOB_STORE, hash) as Promise<Uint8Array | null>
   }
-  getCommitData(hash: BlobHash): Promise<Uint8Array> {
-    return this._get(BLOB_STORE, hash) as Promise<Uint8Array>
+  async getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
+    const commit = await this.getCommit(hash)
+    if (commit === null) return null
+    if (
+      typeof commit !== 'object' ||
+      Array.isArray(commit) ||
+      typeof commit['blob'] !== 'string'
+    )
+      throw Error('Commit does not contain blob hash')
+    const blobHash = Sha256Hash.fromHex(commit['blob']) as BlobHash
+    const data = await this.getCommitData(blobHash)
+    if (data === null) return null
+    return {
+      data,
+      commit,
+    }
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
@@ -199,14 +213,14 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     return this._delete(BOOKMARKS_STORE, id)
   }
 
+  getBookmark(name: string): Promise<JsonValue | null> {
+    return this._get(BOOKMARKS_STORE, name) as Promise<JsonValue | null>
+  }
   getAllBookmarks(): Promise<JsonValue[]> {
     return this._getAll(BOOKMARKS_STORE)
   }
   getAllCommits(): Promise<JsonValue[]> {
     return this._getAll(COMMITS_STORE)
-  }
-  getAllCommitData(): Promise<Uint8Array[]> {
-    return this._getAll(BLOB_STORE) as unknown as Promise<Uint8Array[]>
   }
 
   private async _set(storeName: string, id: IDBValidKey, value: unknown) {

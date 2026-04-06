@@ -4,6 +4,7 @@ import { Bookmark, bookmarkSchema } from './Bookmarks'
 import { Deltizer, DeltizingError } from './Deltizer'
 import { Commit, CommitHash, BlobHash, MetaData, commitSchema } from './Commit'
 import { JsonValue, Storage } from './Storage'
+import { BlobNotFoundError } from './Versie'
 
 export class StorageError extends Error {
   readonly type = 'storage-error'
@@ -39,7 +40,9 @@ export class VersieStorage<M extends MetaData> {
     this.deltizer = new Deltizer((hash) => {
       return Result.fromAsync(async () => {
         try {
-          return Result.ok(await storage.getCommitData(hash))
+          const data = await storage.getCommitData(hash)
+          if (data === null) return Result.error(new BlobNotFoundError(hash))
+          return Result.ok(data)
         } catch (error) {
           return Result.error(this.toStorageError(error))
         }
@@ -51,25 +54,6 @@ export class VersieStorage<M extends MetaData> {
     if (error instanceof StorageError) return error
     if (error instanceof Error) return new StorageError(error)
     return new StorageError(new Error(String(error)))
-  }
-
-  getBookmark(
-    name: string,
-  ): AsyncResult<Bookmark | null, ParseError | StorageError> {
-    return Result.fromAsync(async () => {
-      let raw: Awaited<ReturnType<Storage<M>['getBookmark']>>
-      try {
-        raw = await this.storage.getBookmark(name)
-      } catch (error) {
-        return Result.error(this.toStorageError(error))
-      }
-
-      if (raw === null) return Result.ok(null)
-      const result = bookmarkSchema.safeParse(raw)
-      return result.success
-        ? Result.ok(result.data)
-        : Result.error(new ParseError(result.error))
-    })
   }
 
   setBookmark(bookmark: Bookmark): AsyncResult<void, StorageError> {
@@ -133,7 +117,7 @@ export class VersieStorage<M extends MetaData> {
   setCommit(
     commit: Commit<M>,
     data: string,
-  ): AsyncResult<void, StorageError | DeltizingError> {
+  ): AsyncResult<void, StorageError | DeltizingError | BlobNotFoundError> {
     return Result.fromAsync(async () => {
       try {
         const deltized = await this.deltizer.construct(data)

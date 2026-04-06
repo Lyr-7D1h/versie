@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest'
 import { Versie } from './Versie'
-import { JsonValue, Storage } from './Storage'
+import { JsonValue, Storage, StorageCheckout } from './Storage'
 import { Bookmark } from './Bookmarks'
 import { BlobHash, Commit, CommitHash } from './Commit'
 
@@ -10,19 +10,24 @@ class MemoryStorage implements Storage<undefined> {
   private readonly commits = new Map<string, JsonValue>()
   private readonly commitData = new Map<string, Uint8Array>()
 
-  getBookmark(name: string): Promise<JsonValue | null> {
-    return Promise.resolve(this.bookmarks.get(name) ?? null)
-  }
-
   getCommit(id: CommitHash): Promise<JsonValue | null> {
     return Promise.resolve(this.commits.get(id.toHex()) ?? null)
   }
 
-  getCommitData(hash: BlobHash): Promise<Uint8Array> {
-    const data = this.commitData.get(hash.toHex())
-    if (data === undefined)
-      throw new Error(`No commit data for ${hash.toHex()}`)
-    return Promise.resolve(data)
+  getCommitData(hash: BlobHash): Promise<Uint8Array | null> {
+    return Promise.resolve(this.commitData.get(hash.toHex()) ?? null)
+  }
+
+  getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
+    const commit = this.commits.get(hash.toHex())
+    if (commit === undefined) return Promise.resolve(null)
+    const commitJson = commit as { blob?: string }
+    const blobHex =
+      typeof commitJson.blob === 'string' ? commitJson.blob : undefined
+    const data =
+      blobHex !== undefined ? this.commitData.get(blobHex) : undefined
+    if (data === undefined) return Promise.resolve(null)
+    return Promise.resolve({ commit, data })
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
@@ -48,10 +53,6 @@ class MemoryStorage implements Storage<undefined> {
   getAllCommits(): Promise<JsonValue[]> {
     return Promise.resolve([...this.commits.values()])
   }
-
-  getAllCommitData(): Promise<Uint8Array[]> {
-    return Promise.resolve([...this.commitData.values()])
-  }
 }
 
 const parseMetadata = (_raw: unknown): undefined => undefined
@@ -75,8 +76,8 @@ describe('Versie', () => {
     const allBookmarks = await storage.getAllBookmarks()
     expect(allBookmarks).toHaveLength(1)
 
-    const allCommitData = await storage.getAllCommitData()
-    expect(allCommitData).toHaveLength(1)
+    const checkoutResult = await storage.getCheckout(commit.hash)
+    expect(checkoutResult).not.toBeNull()
   })
 
   test('all commits are stored when multiple commits are made', async () => {
