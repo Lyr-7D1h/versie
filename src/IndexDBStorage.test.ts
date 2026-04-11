@@ -21,7 +21,7 @@ async function createFilledStorage() {
   const { indexdb: storage } = result.value
 
   const source = 'console.log("hello")'
-  const blobHash = (await Sha256Hash.create(source)) as BlobHash
+  const blobHash = (await Sha256Hash.fromString(source)) as BlobHash
   const createdOn = new Date(1_700_000_000_000)
   const commit = await Commit.create(blobHash, createdOn, undefined)
   const bookmark = new Bookmark('main', commit.hash, createdOn)
@@ -39,7 +39,7 @@ describe('IndexDBStorage commit and retrieve', () => {
     const { indexdb: storage } = result.value
 
     const source = 'console.log("hello")'
-    const blobHash = (await Sha256Hash.create(source)) as BlobHash
+    const blobHash = (await Sha256Hash.fromString(source)) as BlobHash
     const createdOn = new Date(1_700_000_000_000)
     const commit = await Commit.create(blobHash, createdOn, undefined)
 
@@ -56,7 +56,7 @@ describe('IndexDBStorage commit and retrieve', () => {
     const { indexdb: storage } = result.value
 
     const source = 'console.log("hello")'
-    const blobHash = (await Sha256Hash.create(source)) as BlobHash
+    const blobHash = (await Sha256Hash.fromString(source)) as BlobHash
     const createdOn = new Date(1_700_000_000_000)
     const commit = await Commit.create(blobHash, createdOn, undefined)
 
@@ -72,7 +72,7 @@ describe('IndexDBStorage commit and retrieve', () => {
     if (!result.ok) throw result.error
     const { indexdb: storage } = result.value
 
-    const unknownHash = (await Sha256Hash.create('nonexistent')) as BlobHash
+    const unknownHash = (await Sha256Hash.fromString('nonexistent')) as BlobHash
     expect(
       await storage.getCommit(
         unknownHash as unknown as import('./Commit').CommitHash,
@@ -85,7 +85,7 @@ describe('IndexDBStorage commit and retrieve', () => {
     if (!result.ok) throw result.error
     const { indexdb: storage } = result.value
 
-    const unknownHash = (await Sha256Hash.create('nonexistent')) as BlobHash
+    const unknownHash = (await Sha256Hash.fromString('nonexistent')) as BlobHash
     expect(await storage.getCommitData(unknownHash)).toBeNull()
   })
 })

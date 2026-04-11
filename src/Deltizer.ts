@@ -13,28 +13,50 @@ export class DeltizingError extends VersieError {
 
 /** Lookup operation for fetching deltizer compressed data */
 type LookupBlob = (hash: BlobHash) => Promise<Uint8Array | null>
-export interface DeltaChainCountCache {
-  get(hash: BlobHash): number | undefined
-  set(hash: BlobHash, count: number): void
+export interface BlobCache {
+  getBlob(hash: BlobHash): Uint8Array | null
+  setBlob(hash: BlobHash, value: Uint8Array): void
+  getDeltaChainCount(hash: BlobHash): number | undefined
+  setDeltaChainCount(hash: BlobHash, count: number): void
 }
 
-/** In memory delta chain count cache */
-export class LRUDeltaChainCountCache implements DeltaChainCountCache {
-  private readonly cache: LRUCache<BlobHash, number>
+type BlobCacheEntry = { blob?: Uint8Array; deltaChainCount?: number }
 
-  constructor(max = 200) {
-    this.cache = new LRUCache({ max })
+/** In memory cache for blobs and delta chain counts */
+export class LRUBlobCache implements BlobCache {
+  private readonly cache: LRUCache<Uint8Array, BlobCacheEntry>
+
+  constructor(max = 200, maxSize = 50 * 1024 * 1024) {
+    this.cache = new LRUCache({
+      max,
+      maxSize,
+      sizeCalculation: (entry) => (entry.blob?.length ?? 0) + 8,
+    })
   }
 
-  get(hash: BlobHash): number | undefined {
-    return this.cache.get(hash)
+  getBlob(hash: BlobHash): Uint8Array | null {
+    return this.cache.get(hash)?.blob ?? null
   }
 
-  set(hash: BlobHash, count: number): void {
-    this.cache.set(hash, count)
+  setBlob(hash: BlobHash, value: Uint8Array): void {
+    const entry = this.cache.peek(hash) ?? {}
+    this.cache.set(hash, { ...entry, blob: value })
+  }
+
+  getDeltaChainCount(hash: BlobHash): number | undefined {
+    return this.cache.get(hash)?.deltaChainCount
+  }
+
+  setDeltaChainCount(hash: BlobHash, count: number): void {
+    const entry = this.cache.peek(hash) ?? {}
+    this.cache.set(hash, { ...entry, deltaChainCount: count })
   }
 }
 
+export enum BlobType {
+  Blob,
+  Delta,
+}
 // TODO: Run in web worker, diffing algorithm can be expensive
 /**
  * Handle how blobs are stored by weighing if it should be turned into a delta and compressing string values
@@ -63,38 +85,84 @@ export class LRUDeltaChainCountCache implements DeltaChainCountCache {
  *```
  * */
 export class Deltizer {
+  static async compressBytes(data: Uint8Array): Promise<Uint8Array> {
+    const normalized = Uint8Array.from(data)
+    const compressed = await new Response(
+      new Blob([normalized])
+        .stream()
+        .pipeThrough(new CompressionStream(COMPRESSION_FORMAT)),
+    ).arrayBuffer()
+    return new Uint8Array(compressed)
+  }
+
+  static async decompressBytes(data: Uint8Array): Promise<Uint8Array> {
+    const normalized = Uint8Array.from(data)
+    const decompressed = await new Response(
+      new Blob([normalized])
+        .stream()
+        .pipeThrough(new DecompressionStream(COMPRESSION_FORMAT)),
+    ).arrayBuffer()
+    return new Uint8Array(decompressed)
+  }
+
+  static blobType(hash: Uint8Array) {
+    switch (hash[0]) {
+      case 0x00:
+        return BlobType.Blob
+      case 0x01:
+        return BlobType.Delta
+      default:
+        return null
+    }
+  }
+
   constructor(
     /** The lookup operation for commit data */
     readonly lookup: LookupBlob,
-    /** Cache for getting the amount of deltas this commit is counting on */
-    readonly deltaChainCountCache: DeltaChainCountCache = new LRUDeltaChainCountCache(),
     /**
      * Cap of the number of deltas that may be chained for a blob. Once the cap is reached, the blob is stored as a full blob instead of another delta.
      *
      * Constructing a delta chain requires reading and applying each delta in sequence. So lookup costs grow with chain depth. */
     private readonly maxDeltaChainCount: number = 50,
+    /** Combined cache for raw blob data and delta chain counts */
+    readonly cache: BlobCache = new LRUBlobCache(),
   ) {}
 
-  /**
-   * Returns null if `hash` could not be found.
-   * Throws a `DeltizingError` if the stored blob data has an unknown type or if a delta cannot be reconstructed because its base blob is missing.
-   */
-  async reconstruct(hash: BlobHash): Promise<string | null> {
-    const data = await this.lookup(hash)
+  /** Use the given `lookup()` with the cache infront */
+  async cachedLookup(hash: BlobHash): Promise<Uint8Array | null> {
+    const cached = this.cache.getBlob(hash)
+    if (cached != null) return cached
+    const value = await this.lookup(hash)
+    if (value != null) this.cache.setBlob(hash, value)
+    return value
+  }
+
+  async reconstructWithoutDecompress(hash: BlobHash) {
+    const data = await this.cachedLookup(hash)
     if (data === null) return null
     const type = data[0]
     if (type === 0x00) {
-      const decompressed = await decompressBytes(data.subarray(1))
-      return new TextDecoder().decode(decompressed)
+      return data.subarray(1)
     } else if (type === 0x01) {
       return this.reconstructFromDelta(data)
     }
     throw new DeltizingError(`Unknown data type: ${type}`)
   }
+  /**
+   * Returns null if `hash` could not be found.
+   * Throws a `DeltizingError` if the stored blob data has an unknown type or if a delta cannot be reconstructed because its base blob is missing.
+   */
+  async reconstruct(hash: BlobHash): Promise<string | null> {
+    const res = await this.reconstructWithoutDecompress(hash)
+    if (res === null) return null
+    if (typeof res === 'string') return res
+    const decompressed = await Deltizer.decompressBytes(res)
+    return new TextDecoder().decode(decompressed)
+  }
 
   /** Recursive function to resolve delta */
   private async reconstructFromDelta(blob: Uint8Array): Promise<string | null> {
-    const delta = await decompressBytes(blob.subarray(1))
+    const delta = await Deltizer.decompressBytes(blob.subarray(1))
     const { base: baseHash, ops } = dedeltize(delta)
     const base = await this.reconstruct(baseHash)
     if (base === null)
@@ -117,14 +185,18 @@ export class Deltizer {
     return result
   }
 
-  /** Get delta chain count for a baseHash that can be referencing a blob or delta, throwing an error if it could not be found */
+  /**
+   * Get delta chain count for a baseHash that can be referencing a blob or delta. Counting current `baseHash` if it is a delta
+   *
+   * throws an error if it could not be found
+   * */
   async getDeltaCount(baseHash: BlobHash): Promise<number> {
-    const cached = this.deltaChainCountCache.get(baseHash)
+    const cached = this.cache.getDeltaChainCount(baseHash)
     if (cached != null) {
       return cached
     }
 
-    const raw = await this.lookup(baseHash)
+    const raw = await this.cachedLookup(baseHash)
     if (raw === null)
       throw new DeltizingError(
         'Failed to construct base from hash ' + baseHash.toHex(),
@@ -132,44 +204,51 @@ export class Deltizer {
 
     const type = raw[0]
     if (type === 0x00) {
-      this.deltaChainCountCache.set(baseHash, 0)
+      this.cache.setDeltaChainCount(baseHash, 0)
       return 0
     }
     if (type !== 0x01) {
       throw new DeltizingError(`Unknown data type: ${type}`)
     }
-    const delta = await decompressBytes(raw.subarray(1))
+    const delta = await Deltizer.decompressBytes(raw.subarray(1))
 
     // get count from base and add 1
-    const base = Sha256Hash.fromBuffer(delta.slice(0, 32)) as BlobHash
+    const base = Sha256Hash.create(delta.slice(0, 32)) as BlobHash
     // chain count is previous + 1
     const baseCount = await this.getDeltaCount(base)
     const count = baseCount + 1
-    this.deltaChainCountCache.set(baseHash, count)
+    this.cache.setDeltaChainCount(baseHash, count)
     return count
   }
 
   /** Return a compressed blob or delta */
-  async construct(value: string, base?: BlobHash): Promise<Uint8Array> {
+  async construct(
+    value: string,
+    base?: BlobHash,
+  ): Promise<{
+    data: Uint8Array
+    /** The delta chain count of the base, how many deltas the base is dependent on including itself. So `0` if Blob and `1` if delta on a single blob, `>1` if more in between */
+    deltaChainCount: number
+  }> {
     if (base) {
-      const baseValue = await this.shouldStoreAsDelta(value, base)
-      if (baseValue !== false) {
-        const delta = deltize(base, baseValue, value)
-        const compressedDelta = await compressBytes(delta)
+      const res = await this.shouldStoreAsDelta(value, base)
+      if (res !== false) {
+        const delta = deltize(base, res.baseValue, value)
+        const compressedDelta = await Deltizer.compressBytes(delta)
         const deltaBytes = new Uint8Array(1 + compressedDelta.length)
         deltaBytes[0] = 0x01
         deltaBytes.set(compressedDelta, 1)
-        return deltaBytes
+        return { data: deltaBytes, deltaChainCount: res.count }
       }
     }
 
     const encoder = new TextEncoder()
     const blob = encoder.encode(value)
-    const compressedBlob = await compressBytes(blob)
+    const compressedBlob = await Deltizer.compressBytes(blob)
     const blobBytes = new Uint8Array(1 + compressedBlob.length)
     blobBytes[0] = 0x00
     blobBytes.set(compressedBlob, 1)
-    return blobBytes
+    return { data: blobBytes, deltaChainCount: 0 }
   }
 
   /**
@@ -180,7 +259,7 @@ export class Deltizer {
   async shouldStoreAsDelta(
     value: string,
     base: BlobHash,
-  ): Promise<string | false> {
+  ): Promise<{ baseValue: string; count: number } | false> {
     // skip deltize if value is very small
     // minimum delta overhead is roughly:
     // id + blob hash + 1 copy delta op + 1 insert delta op
@@ -216,28 +295,8 @@ export class Deltizer {
       return false
     }
 
-    return baseValue
+    return { baseValue, count }
   }
-}
-
-async function compressBytes(data: Uint8Array): Promise<Uint8Array> {
-  const normalized = Uint8Array.from(data)
-  const compressed = await new Response(
-    new Blob([normalized])
-      .stream()
-      .pipeThrough(new CompressionStream(COMPRESSION_FORMAT)),
-  ).arrayBuffer()
-  return new Uint8Array(compressed)
-}
-
-async function decompressBytes(data: Uint8Array): Promise<Uint8Array> {
-  const normalized = Uint8Array.from(data)
-  const decompressed = await new Response(
-    new Blob([normalized])
-      .stream()
-      .pipeThrough(new DecompressionStream(COMPRESSION_FORMAT)),
-  ).arrayBuffer()
-  return new Uint8Array(decompressed)
 }
 
 /**
@@ -390,7 +449,7 @@ enum DeltaType {
 }
 /** Convert a base with a delta to the full original blob */
 function dedeltize(data: Uint8Array): Delta {
-  const base = Sha256Hash.fromBuffer(data.slice(0, 32)) as BlobHash
+  const base = Sha256Hash.create(data.slice(0, 32)) as BlobHash
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
 
   const ops: DeltaOperation[] = []

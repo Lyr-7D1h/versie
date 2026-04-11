@@ -1,25 +1,30 @@
 import { z } from 'zod'
 
-export const sha256HashSchema = z.string().transform((data, ctx) => {
-  try {
-    return Sha256Hash.fromHex(data)
-  } catch (e) {
-    ctx.addIssue({
-      code: 'custom',
-      message: `Failed to parse to hash ${(e as Error).toString()}`,
-    })
-    return z.NEVER
-  }
-})
-
 export class Sha256Hash extends Uint8Array {
-  static fromBuffer(hash: Uint8Array<ArrayBuffer>) {
+  static schema = z.string().transform((data, ctx) => {
+    try {
+      return Sha256Hash.fromHex(data)
+    } catch (e) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `Failed to parse to hash ${(e as Error).toString()}`,
+      })
+      return z.NEVER
+    }
+  })
+
+  static create(hash: Uint8Array<ArrayBuffer>) {
+    if (hash.byteLength != 32) throw Error('Hash has invalid length of bytes')
     return new Sha256Hash(hash)
   }
 
-  static async create(data: string) {
+  static async fromString(data: string) {
     const encoded = new TextEncoder().encode(data)
-    const hash = await crypto.subtle.digest('SHA-256', encoded)
+    return this.fromBytes(encoded)
+  }
+
+  static async fromBytes(data: Uint8Array<ArrayBuffer>) {
+    const hash = await crypto.subtle.digest('SHA-256', data)
     return new Sha256Hash(new Uint8Array(hash))
   }
 
@@ -50,7 +55,7 @@ export class Sha256Hash extends Uint8Array {
     super(buffer)
   }
 
-  /** convert hash buffer to hexidecimal string */
+  /** convert hash buffer to hexadecimal string */
   toHex() {
     const hashArray = Array.from(this)
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')

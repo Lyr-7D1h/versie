@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import { Deltizer, DeltizingError, LRUDeltaChainCountCache } from './Deltizer'
+import { Deltizer, DeltizingError, LRUBlobCache } from './Deltizer'
 import { Sha256Hash } from './Sha256Hash'
 import { BlobHash } from './Commit'
 
@@ -8,7 +8,7 @@ describe('Deltizer', () => {
   let deltizer: Deltizer
 
   const createHash = async (str: string): Promise<BlobHash> => {
-    return (await Sha256Hash.create(str)) as BlobHash
+    return (await Sha256Hash.fromString(str)) as BlobHash
   }
 
   /** Construct blob data and store it in the in-memory map */
@@ -18,7 +18,7 @@ describe('Deltizer', () => {
     base?: BlobHash,
   ): Promise<void> => {
     const data = await deltizer.construct(content, base)
-    blobStore.set(hash.toBase64(), data)
+    blobStore.set(hash.toBase64(), data.data)
   }
 
   beforeEach(() => {
@@ -214,7 +214,7 @@ describe('Deltizer', () => {
       await deltizer.reconstruct(hash3)
       await deltizer.reconstruct(hash3)
 
-      expect(deltizer.deltaChainCountCache.get(hash2)).toBe(1)
+      expect(deltizer.cache.getDeltaChainCount(hash2)).toBe(1)
     })
   })
 
@@ -323,9 +323,9 @@ describe('Deltizer', () => {
     test('populates cache after computing count', async () => {
       const hash = await createHash('gdc-cache-populate')
       await storeBlob(hash, 'some content')
-      expect(deltizer.deltaChainCountCache.get(hash)).toBeUndefined()
+      expect(deltizer.cache.getDeltaChainCount(hash)).toBeUndefined()
       await deltizer.getDeltaCount(hash)
-      expect(deltizer.deltaChainCountCache.get(hash)).toBe(0)
+      expect(deltizer.cache.getDeltaChainCount(hash)).toBe(0)
     })
 
     test('uses cached value on subsequent calls', async () => {
@@ -333,7 +333,7 @@ describe('Deltizer', () => {
       await storeBlob(hash, 'some content')
       await deltizer.getDeltaCount(hash)
       // Override cache to verify subsequent calls read from it
-      deltizer.deltaChainCountCache.set(hash, 99)
+      deltizer.cache.setDeltaChainCount(hash, 99)
       const count = await deltizer.getDeltaCount(hash)
       expect(count).toBe(99)
     })
@@ -362,7 +362,7 @@ describe('Deltizer', () => {
       const hash = await createHash('ssd-max-chain')
       await storeBlob(hash, 'x'.repeat(200))
       // Pre-populate cache to simulate a chain exceeding the 50-count max
-      deltizer.deltaChainCountCache.set(hash, 51)
+      deltizer.cache.setDeltaChainCount(hash, 51)
       const result = await deltizer.shouldStoreAsDelta('x'.repeat(100), hash)
       expect(result).toBe(false)
     })
@@ -392,7 +392,7 @@ describe('Deltizer', () => {
       const similarContent =
         'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
       const result = await deltizer.shouldStoreAsDelta(similarContent, hash)
-      expect(result).toBe(baseContent)
+      expect(result).toEqual({ baseValue: baseContent, count: 0 })
     })
 
     test('throws DeltizingError when base hash is not in the store', async () => {
@@ -408,7 +408,7 @@ describe('Deltizer', () => {
       const data = await deltizer.construct(
         'some value to store without a base',
       )
-      expect(data[0]).toBe(0x00)
+      expect(data.data[0]).toBe(0x00)
     })
 
     test('produces type byte 0x01 (delta) for sufficiently similar base content', async () => {
@@ -416,20 +416,20 @@ describe('Deltizer', () => {
       const baseContent =
         'The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
       const baseData = await deltizer.construct(baseContent)
-      blobStore.set(baseHash.toBase64(), baseData)
+      blobStore.set(baseHash.toBase64(), baseData.data)
       const similarContent =
         'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
       const data = await deltizer.construct(similarContent, baseHash)
-      expect(data[0]).toBe(0x01)
+      expect(data.data[0]).toBe(0x01)
     })
 
     test('produces type byte 0x00 (blob) when value is too short for a delta', async () => {
       const baseHash = await createHash('cof-short-value')
       const baseData = await deltizer.construct('base content')
-      blobStore.set(baseHash.toBase64(), baseData)
+      blobStore.set(baseHash.toBase64(), baseData.data)
       // 'short' is fewer than 64 chars — shouldStoreAsDelta returns false
       const data = await deltizer.construct('short', baseHash)
-      expect(data[0]).toBe(0x00)
+      expect(data.data[0]).toBe(0x00)
     })
 
     test('reconstruct round-trips constructed data correctly', async () => {
@@ -440,76 +440,149 @@ describe('Deltizer', () => {
       const deltaContent =
         'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
       const baseData = await deltizer.construct(baseContent)
-      blobStore.set(baseHash.toBase64(), baseData)
+      blobStore.set(baseHash.toBase64(), baseData.data)
       const deltaData = await deltizer.construct(deltaContent, baseHash)
-      blobStore.set(deltaHash.toBase64(), deltaData)
+      blobStore.set(deltaHash.toBase64(), deltaData.data)
       expect(await deltizer.reconstruct(deltaHash)).toBe(deltaContent)
     })
   })
 })
 
-describe('LRUDeltaChainCountCache', () => {
-  test('returns undefined for unknown keys', async () => {
-    const cache = new LRUDeltaChainCountCache()
-    const hash = (await Sha256Hash.create('unknown-key')) as BlobHash
-    expect(cache.get(hash)).toBeUndefined()
+describe('LRUBlobCache', () => {
+  test('returns undefined for unknown delta chain count', async () => {
+    const cache = new LRUBlobCache()
+    const hash = (await Sha256Hash.fromString('unknown-key')) as BlobHash
+    expect(cache.getDeltaChainCount(hash)).toBeUndefined()
   })
 
-  test('stores and retrieves a value', async () => {
-    const cache = new LRUDeltaChainCountCache()
-    const hash = (await Sha256Hash.create('stored-key')) as BlobHash
-    cache.set(hash, 7)
-    expect(cache.get(hash)).toBe(7)
+  test('stores and retrieves a delta chain count', async () => {
+    const cache = new LRUBlobCache()
+    const hash = (await Sha256Hash.fromString('stored-key')) as BlobHash
+    cache.setDeltaChainCount(hash, 7)
+    expect(cache.getDeltaChainCount(hash)).toBe(7)
   })
 
-  test('overwrites an existing value for the same key', async () => {
-    const cache = new LRUDeltaChainCountCache()
-    const hash = (await Sha256Hash.create('overwrite-key')) as BlobHash
-    cache.set(hash, 1)
-    cache.set(hash, 10)
-    expect(cache.get(hash)).toBe(10)
+  test('overwrites an existing delta chain count for the same key', async () => {
+    const cache = new LRUBlobCache()
+    const hash = (await Sha256Hash.fromString('overwrite-key')) as BlobHash
+    cache.setDeltaChainCount(hash, 1)
+    cache.setDeltaChainCount(hash, 10)
+    expect(cache.getDeltaChainCount(hash)).toBe(10)
   })
 
   test('stores zero as a valid count', async () => {
-    const cache = new LRUDeltaChainCountCache()
-    const hash = (await Sha256Hash.create('zero-key')) as BlobHash
-    cache.set(hash, 0)
-    expect(cache.get(hash)).toBe(0)
+    const cache = new LRUBlobCache()
+    const hash = (await Sha256Hash.fromString('zero-key')) as BlobHash
+    cache.setDeltaChainCount(hash, 0)
+    expect(cache.getDeltaChainCount(hash)).toBe(0)
   })
 
   test('keeps separate entries for different keys', async () => {
-    const cache = new LRUDeltaChainCountCache()
-    const hash1 = (await Sha256Hash.create('key-a')) as BlobHash
-    const hash2 = (await Sha256Hash.create('key-b')) as BlobHash
-    cache.set(hash1, 3)
-    cache.set(hash2, 7)
-    expect(cache.get(hash1)).toBe(3)
-    expect(cache.get(hash2)).toBe(7)
+    const cache = new LRUBlobCache()
+    const hash1 = (await Sha256Hash.fromString('key-a')) as BlobHash
+    const hash2 = (await Sha256Hash.fromString('key-b')) as BlobHash
+    cache.setDeltaChainCount(hash1, 3)
+    cache.setDeltaChainCount(hash2, 7)
+    expect(cache.getDeltaChainCount(hash1)).toBe(3)
+    expect(cache.getDeltaChainCount(hash2)).toBe(7)
   })
 
   test('evicts the least-recently-used entry when max size is exceeded', async () => {
-    const cache = new LRUDeltaChainCountCache(2)
-    const hash1 = (await Sha256Hash.create('lru-1')) as BlobHash
-    const hash2 = (await Sha256Hash.create('lru-2')) as BlobHash
-    const hash3 = (await Sha256Hash.create('lru-3')) as BlobHash
-    cache.set(hash1, 1)
-    cache.set(hash2, 2)
+    const cache = new LRUBlobCache(2)
+    const hash1 = (await Sha256Hash.fromString('lru-1')) as BlobHash
+    const hash2 = (await Sha256Hash.fromString('lru-2')) as BlobHash
+    const hash3 = (await Sha256Hash.fromString('lru-3')) as BlobHash
+    cache.setDeltaChainCount(hash1, 1)
+    cache.setDeltaChainCount(hash2, 2)
     // Adding hash3 should evict hash1 (the LRU entry)
-    cache.set(hash3, 3)
-    expect(cache.get(hash1)).toBeUndefined()
-    expect(cache.get(hash2)).toBe(2)
-    expect(cache.get(hash3)).toBe(3)
+    cache.setDeltaChainCount(hash3, 3)
+    expect(cache.getDeltaChainCount(hash1)).toBeUndefined()
+    expect(cache.getDeltaChainCount(hash2)).toBe(2)
+    expect(cache.getDeltaChainCount(hash3)).toBe(3)
   })
 
   test('uses default max of 200 entries', async () => {
-    const cache = new LRUDeltaChainCountCache()
+    const cache = new LRUBlobCache()
     const hashes: BlobHash[] = []
     for (let i = 0; i < 200; i++) {
-      hashes.push((await Sha256Hash.create(`fill-${i}`)) as BlobHash)
-      cache.set(hashes[i]!, i)
+      hashes.push((await Sha256Hash.fromString(`fill-${i}`)) as BlobHash)
+      cache.setDeltaChainCount(hashes[i]!, i)
     }
     // All 200 entries should still be present
-    expect(cache.get(hashes[0]!)).toBe(0)
-    expect(cache.get(hashes[199]!)).toBe(199)
+    expect(cache.getDeltaChainCount(hashes[0]!)).toBe(0)
+    expect(cache.getDeltaChainCount(hashes[199]!)).toBe(199)
+  })
+
+  describe('getBlob / setBlob', () => {
+    test('returns null for an unknown hash', async () => {
+      const cache = new LRUBlobCache()
+      const hash = (await Sha256Hash.fromString('blob-unknown')) as BlobHash
+      expect(cache.getBlob(hash)).toBeNull()
+    })
+
+    test('stores and retrieves a blob', async () => {
+      const cache = new LRUBlobCache()
+      const hash = (await Sha256Hash.fromString('blob-stored')) as BlobHash
+      const blob = new Uint8Array([1, 2, 3])
+      cache.setBlob(hash, blob)
+      expect(cache.getBlob(hash)).toBe(blob)
+    })
+
+    test('overwrites an existing blob', async () => {
+      const cache = new LRUBlobCache()
+      const hash = (await Sha256Hash.fromString('blob-overwrite')) as BlobHash
+      const first = new Uint8Array([1, 2, 3])
+      const second = new Uint8Array([4, 5, 6])
+      cache.setBlob(hash, first)
+      cache.setBlob(hash, second)
+      expect(cache.getBlob(hash)).toBe(second)
+    })
+  })
+
+  describe('entry preservation', () => {
+    test('setBlob preserves existing deltaChainCount', async () => {
+      const cache = new LRUBlobCache()
+      const hash = (await Sha256Hash.fromString('preserve-count')) as BlobHash
+      cache.setDeltaChainCount(hash, 5)
+      cache.setBlob(hash, new Uint8Array([9, 8, 7]))
+      expect(cache.getDeltaChainCount(hash)).toBe(5)
+    })
+
+    test('setDeltaChainCount preserves existing blob', async () => {
+      const cache = new LRUBlobCache()
+      const hash = (await Sha256Hash.fromString('preserve-blob')) as BlobHash
+      const blob = new Uint8Array([1, 2, 3])
+      cache.setBlob(hash, blob)
+      cache.setDeltaChainCount(hash, 4)
+      expect(cache.getBlob(hash)).toBe(blob)
+    })
+  })
+
+  describe('size-based eviction', () => {
+    test('evicts entries when maxSize is exceeded', async () => {
+      // sizeCalculation: blob.length + 8 — a 10-byte blob costs 18 bytes
+      // maxSize of 20 fits one entry (18 bytes) but not two (36 bytes)
+      const cache = new LRUBlobCache(100, 20)
+      const h1 = (await Sha256Hash.fromString('size-evict-1')) as BlobHash
+      const h2 = (await Sha256Hash.fromString('size-evict-2')) as BlobHash
+      cache.setBlob(h1, new Uint8Array(10))
+      cache.setBlob(h2, new Uint8Array(10))
+      expect(cache.getBlob(h1)).toBeNull()
+      expect(cache.getBlob(h2)).not.toBeNull()
+    })
+
+    test('entries with only deltaChainCount have minimal size', async () => {
+      // Size with no blob is 0 + 8 = 8 bytes; 3 such entries fit in maxSize=30
+      const cache = new LRUBlobCache(100, 30)
+      const h1 = (await Sha256Hash.fromString('min-size-1')) as BlobHash
+      const h2 = (await Sha256Hash.fromString('min-size-2')) as BlobHash
+      const h3 = (await Sha256Hash.fromString('min-size-3')) as BlobHash
+      cache.setDeltaChainCount(h1, 1)
+      cache.setDeltaChainCount(h2, 2)
+      cache.setDeltaChainCount(h3, 3)
+      expect(cache.getDeltaChainCount(h1)).toBe(1)
+      expect(cache.getDeltaChainCount(h2)).toBe(2)
+      expect(cache.getDeltaChainCount(h3)).toBe(3)
+    })
   })
 })

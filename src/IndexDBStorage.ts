@@ -225,7 +225,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.put(bytes, commit.blob)
+      const blobReq = blobsStore.put(bytes.data, commit.blob)
       blobReq.onerror = () => {
         reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
       }
@@ -430,8 +430,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
                 if (isBinaryKeyStore) {
                   // cursor.key for binary stores is returned as ArrayBuffer per IDB spec
                   const normalizedKeyBytes = new Uint8Array(key as ArrayBuffer)
-                  keyStr =
-                    Sha256Hash.fromBuffer(normalizedKeyBytes).toBase64(true)
+                  keyStr = Sha256Hash.create(normalizedKeyBytes).toBase64(true)
                 } else if (typeof key === 'string') {
                   keyStr = key
                 } else if (typeof key === 'number') {

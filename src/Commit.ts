@@ -1,15 +1,15 @@
 import { z } from 'zod'
-import { Sha256Hash, sha256HashSchema } from './Sha256Hash'
+import { Sha256Hash } from './Sha256Hash'
 import { JsonValue } from './Storage'
 import { Tagged } from './Tagged'
 
-export const commitHashSchema = sha256HashSchema as z.ZodPipe<
+export const commitHashSchema = Sha256Hash.schema as z.ZodPipe<
   z.ZodString,
   z.ZodTransform<CommitHash, string>
 >
 export type CommitHash = Tagged<Sha256Hash, 'CommitHash'>
 
-export const blobHashSchema = sha256HashSchema as z.ZodPipe<
+export const blobHashSchema = Sha256Hash.schema as z.ZodPipe<
   z.ZodString,
   z.ZodTransform<BlobHash, string>
 >
@@ -63,7 +63,7 @@ export class Commit<M extends MetaData> {
     /** Hash of parent commit, null if it is a root commit */
     parent?: CommitHash,
   ): Promise<Commit<M>> {
-    const hash = (await Sha256Hash.create(
+    const hash = (await Sha256Hash.fromString(
       `${blob.toBase64()}${createdOn.getTime()}${parent?.toBase64() ?? ''}${typeof metadata !== 'undefined' ? JSON.stringify(metadata.toJson()) : ''}`,
     )) as CommitHash
 

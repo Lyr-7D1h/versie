@@ -177,7 +177,7 @@ export class Versie<M extends MetaData> {
     | BlobNotFoundError
   > {
     return Result.fromAsync(async () => {
-      const blob = (await Sha256Hash.create(data)) as BlobHash
+      const blob = (await Sha256Hash.fromString(data)) as BlobHash
       // don't commit if nothing changed
       if (
         this._head &&
