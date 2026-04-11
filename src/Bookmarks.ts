@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { Commit, CommitHash, commitHashSchema, MetaData } from './Commit'
-import { StorageError, VersieStorage } from './VersieStorage'
+import { VersieStorage, VersieStorageError } from './VersieStorage'
 import { Result } from 'typescript-result'
 import { VersieError } from './VersieError'
 
@@ -87,7 +87,7 @@ export class Bookmarks<M extends MetaData> {
   ): Promise<
     Result<
       Bookmark,
-      StorageError | BookmarkAlreadyExistsError | BookmarkNotFoundError
+      VersieStorageError | BookmarkAlreadyExistsError | BookmarkNotFoundError
     >
   > {
     // old doesn't exist
@@ -115,7 +115,7 @@ export class Bookmarks<M extends MetaData> {
   async setCommit(
     bookmarkName: string,
     commit: CommitHash,
-  ): Promise<Result<Bookmark, BookmarkNotFoundError | StorageError>> {
+  ): Promise<Result<Bookmark, BookmarkNotFoundError | VersieStorageError>> {
     const bookmark = this.getBookmark(bookmarkName)
     if (bookmark === null) {
       return Result.error(new BookmarkNotFoundError(bookmarkName))
@@ -172,7 +172,9 @@ export class Bookmarks<M extends MetaData> {
 
   async add(
     bookmark: Bookmark,
-  ): Promise<Result<Bookmark, BookmarkAlreadyExistsError | StorageError>> {
+  ): Promise<
+    Result<Bookmark, BookmarkAlreadyExistsError | VersieStorageError>
+  > {
     if (this.getBookmark(bookmark.name) !== null)
       return Result.error(new BookmarkAlreadyExistsError(bookmark.name))
 
@@ -186,7 +188,7 @@ export class Bookmarks<M extends MetaData> {
 
   async remove(
     name: string,
-  ): Promise<Result<Bookmark, BookmarkNotFoundError | StorageError>> {
+  ): Promise<Result<Bookmark, BookmarkNotFoundError | VersieStorageError>> {
     const bm = this.getBookmark(name)
     if (!bm) return Result.error(new BookmarkNotFoundError(name))
     this.bookmarks.delete(name)

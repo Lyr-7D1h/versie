@@ -8,7 +8,12 @@ import {
 export { BookmarkAlreadyExistsError } from './Bookmarks'
 import { Storage } from './Storage'
 import { AsyncResult, Result } from 'typescript-result'
-import { ParseError, StorageError, VersieStorage } from './VersieStorage'
+import {
+  ParseError,
+  StorageError,
+  VersieStorage,
+  VersieStorageError,
+} from './VersieStorage'
 import { Sha256Hash } from './Sha256Hash'
 import { VersieError } from './VersieError'
 import { DeltizingError } from './Deltizer'
@@ -40,7 +45,7 @@ export class BlobNotFoundError extends VersieError {
 }
 
 // TODO: use https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system for storage
-/** Version Control Software for creagen-editor */
+/** Version Control Software designed for web environments */
 export class Versie<M extends MetaData> {
   static async create<M extends MetaData>(
     storage: Storage<M>,
@@ -118,7 +123,7 @@ export class Versie<M extends MetaData> {
   history(
     n: number,
     start?: Commit<M>,
-  ): AsyncResult<HistoryItem<M>[], ParseError | StorageError> {
+  ): AsyncResult<HistoryItem<M>[], ParseError | VersieStorageError> {
     return Result.fromAsync(async () => {
       /** PERF: Make more efficient by querying commits by same author around that time and caching those commits */
       let next: Commit<M> | null = start ?? this._head

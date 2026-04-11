@@ -3,6 +3,7 @@ import { JsonValue, Storage, StorageCheckout } from './Storage'
 import { BlobHash, Commit, CommitHash, MetaData } from './Commit'
 import { Bookmark } from './Bookmarks'
 import { Sha256Hash } from './Sha256Hash'
+import { Deltizer } from './Deltizer'
 
 export const COMMITS_STORE = 'commits'
 export const BLOB_STORE = 'blobs'
@@ -63,7 +64,9 @@ function migrations(oldVersion: number, db: IDBDatabase) {
 
 /** Entry point for fetching all data */
 export class IndexDBStorage<M extends MetaData> implements Storage<M> {
-  static create<M extends MetaData>(): AsyncResult<
+  static create<M extends MetaData>(
+    deltizer?: Deltizer,
+  ): AsyncResult<
     { indexdb: IndexDBStorage<M>; persisted: boolean },
     IndexDBStorageCreateError
   > {
@@ -111,7 +114,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         req.onsuccess = () => {
           resolveOnce(
             Result.ok({
-              indexdb: new IndexDBStorage(req.result),
+              indexdb: new IndexDBStorage(req.result, deltizer),
               persisted,
             }),
           )
@@ -154,13 +157,23 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     })
   }
 
-  private constructor(private readonly db: IDBDatabase) {}
+  readonly deltizer: Deltizer
+  private constructor(
+    private readonly db: IDBDatabase,
+    deltizer?: Deltizer,
+  ) {
+    this.deltizer = deltizer
+      ? deltizer
+      : new Deltizer(
+          (hash) => this._get(BLOB_STORE, hash) as Promise<Uint8Array | null>,
+        )
+  }
 
   getCommit(hash: CommitHash): Promise<JsonValue | null> {
     return this._get(COMMITS_STORE, hash) as Promise<JsonValue>
   }
-  getCommitData(hash: BlobHash): Promise<Uint8Array | null> {
-    return this._get(BLOB_STORE, hash) as Promise<Uint8Array | null>
+  async getCommitData(hash: BlobHash): Promise<string | null> {
+    return this.deltizer.reconstruct(hash)
   }
   async getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
     const commit = await this.getCommit(hash)
@@ -174,16 +187,26 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     const blobHash = Sha256Hash.fromHex(commit['blob']) as BlobHash
     const data = await this.getCommitData(blobHash)
     if (data === null) return null
-    return {
-      data,
-      commit,
-    }
+    return { commit, data }
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
-  async setCommit(commit: Commit<M>, data: Uint8Array): Promise<void> {
+  async setCommit(commit: Commit<M>, data: string): Promise<void> {
+    let parentBlobHash: BlobHash | undefined
+    if (commit.parent) {
+      const parentCommit = await this.getCommit(commit.parent)
+      if (
+        parentCommit !== null &&
+        typeof parentCommit === 'object' &&
+        !Array.isArray(parentCommit) &&
+        typeof parentCommit['blob'] === 'string'
+      ) {
+        parentBlobHash = Sha256Hash.fromHex(parentCommit['blob']) as BlobHash
+      }
+    }
+    const bytes = await this.deltizer.construct(data, parentBlobHash)
     const trans = this.db.transaction([COMMITS_STORE, BLOB_STORE], 'readwrite')
     await new Promise<void>((resolve, reject) => {
       trans.oncomplete = () => {
@@ -202,7 +225,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.put(data, commit.blob)
+      const blobReq = blobsStore.put(bytes, commit.blob)
       blobReq.onerror = () => {
         reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
       }

@@ -8,13 +8,13 @@ import { BlobHash, Commit, CommitHash } from './Commit'
 class MemoryStorage implements Storage<undefined> {
   private readonly bookmarks = new Map<string, JsonValue>()
   private readonly commits = new Map<string, JsonValue>()
-  private readonly commitData = new Map<string, Uint8Array>()
+  private readonly commitData = new Map<string, string>()
 
   getCommit(id: CommitHash): Promise<JsonValue | null> {
     return Promise.resolve(this.commits.get(id.toHex()) ?? null)
   }
 
-  getCommitData(hash: BlobHash): Promise<Uint8Array | null> {
+  getCommitData(hash: BlobHash): Promise<string | null> {
     return Promise.resolve(this.commitData.get(hash.toHex()) ?? null)
   }
 
@@ -35,7 +35,7 @@ class MemoryStorage implements Storage<undefined> {
     return Promise.resolve()
   }
 
-  setCommit(commit: Commit<undefined>, data: Uint8Array): Promise<void> {
+  setCommit(commit: Commit<undefined>, data: string): Promise<void> {
     this.commits.set(commit.hash.toHex(), commit.toJson())
     this.commitData.set(commit.blob.toHex(), data)
     return Promise.resolve()

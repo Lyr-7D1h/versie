@@ -2,163 +2,221 @@ import { LRUCache } from 'lru-cache'
 import diff from 'fast-diff'
 import { BlobHash } from './Commit'
 import { Sha256Hash } from './Sha256Hash'
-import { AsyncResult, Result } from 'typescript-result'
 import { VersieError } from './VersieError'
-import { StorageError } from './VersieStorage'
-import { BlobNotFoundError } from './Versie'
 
 const COMPRESSION_FORMAT = 'deflate'
-/**
- * Cap the number of deltas that may be chained for a blob.
- *
- * Reconstructing a delta chain requires reading and applying each delta in sequence,
- * so lookup cost grows with chain depth. Keeping this limit at 50 bounds worst-case
- * reconstruction latency while still allowing enough chaining to benefit from delta
- * compression in typical edit histories. Raising the limit may improve storage density
- * for long revision sequences, but it also increases read-time CPU and decompression work.
- */
-const MAX_DELTA_CHAIN_COUNT = 50
 
 /** An error that happened when trying to turn commit data in deltas */
 export class DeltizingError extends VersieError {
   readonly type = 'blob-storage-error'
 }
 
-type GetCommitData = (
-  hash: BlobHash,
-) => AsyncResult<Uint8Array, StorageError | BlobNotFoundError>
+/** Lookup operation for fetching deltizer compressed data */
+type LookupBlob = (hash: BlobHash) => Promise<Uint8Array | null>
+export interface DeltaChainCountCache {
+  get(hash: BlobHash): number | undefined
+  set(hash: BlobHash, count: number): void
+}
+
+/** In memory delta chain count cache */
+export class LRUDeltaChainCountCache implements DeltaChainCountCache {
+  private readonly cache: LRUCache<BlobHash, number>
+
+  constructor(max = 200) {
+    this.cache = new LRUCache({ max })
+  }
+
+  get(hash: BlobHash): number | undefined {
+    return this.cache.get(hash)
+  }
+
+  set(hash: BlobHash, count: number): void {
+    this.cache.set(hash, count)
+  }
+}
 
 // TODO: Run in web worker, diffing algorithm can be expensive
 /**
- * Handle how blobs are stored by turning them into deltas or not
- */
+ * Handle how blobs are stored by weighing if it should be turned into a delta and compressing string values
+ *
+ * Binary format of a blob is
+ *
+ * ```
+ * 0  3  7  11  15  19  23  27  31
+ * | 0x00| BLOB DATA...
+ * ```
+ *
+ * Binary format of a delta is
+ *
+ * ```
+ * 0  3  7  11  15  19  23  27  31
+ * | 0x01|
+ *
+ *
+ *
+ *
+ *        BLOB HASH (32 bytes)
+ *
+ *
+ *
+ *       | DELTA OPERATIONS...
+ *```
+ * */
 export class Deltizer {
-  constructor(readonly getCommitData: GetCommitData) {}
+  constructor(
+    /** The lookup operation for commit data */
+    readonly lookup: LookupBlob,
+    /** Cache for getting the amount of deltas this commit is counting on */
+    readonly deltaChainCountCache: DeltaChainCountCache = new LRUDeltaChainCountCache(),
+    /**
+     * Cap of the number of deltas that may be chained for a blob. Once the cap is reached, the blob is stored as a full blob instead of another delta.
+     *
+     * Constructing a delta chain requires reading and applying each delta in sequence. So lookup costs grow with chain depth. */
+    private readonly maxDeltaChainCount: number = 50,
+  ) {}
 
-  reconstruct(
-    hash: BlobHash,
-  ): AsyncResult<
-    string | null,
-    DeltizingError | StorageError | BlobNotFoundError
-  > {
-    return Result.fromAsync(async () => {
-      const dataResult = await this.getCommitData(hash)
-      if (!dataResult.ok) return dataResult
-      const data = dataResult.value
-      const type = data[0]
-      if (type === 0x00) {
-        const decompressed = await decompressBytes(data.subarray(1))
-        return Result.ok(new TextDecoder().decode(decompressed))
-      } else if (type === 0x01) {
-        return this.reconstructFromDelta(hash, this.getCommitData)
-      }
-      return Result.error(new DeltizingError(`Unknown data type: ${type}`))
-    })
+  /**
+   * Returns null if `hash` could not be found.
+   * Throws a `DeltizingError` if the stored blob data has an unknown type or if a delta cannot be reconstructed because its base blob is missing.
+   */
+  async reconstruct(hash: BlobHash): Promise<string | null> {
+    const data = await this.lookup(hash)
+    if (data === null) return null
+    const type = data[0]
+    if (type === 0x00) {
+      const decompressed = await decompressBytes(data.subarray(1))
+      return new TextDecoder().decode(decompressed)
+    } else if (type === 0x01) {
+      return this.reconstructFromDelta(data)
+    }
+    throw new DeltizingError(`Unknown data type: ${type}`)
   }
 
-  private reconstructFromDelta(
-    hash: BlobHash,
-    getCommitData: GetCommitData,
-  ): AsyncResult<
-    string | null,
-    DeltizingError | StorageError | BlobNotFoundError
-  > {
-    return Result.fromAsync(async () => {
-      const rawResult = await getCommitData(hash)
-      if (!rawResult.ok) return rawResult
-      const raw = rawResult.value
-      const delta = await decompressBytes(raw.subarray(1))
-      const { base: baseHash, ops } = dedeltize(delta)
-      const baseResult = await this.reconstruct(baseHash)
-      if (!baseResult.ok) return baseResult
-      const base = baseResult.value
-      if (base == null) {
-        return Result.error(
-          new DeltizingError('Could not find base of delta ' + hash.toBase64()),
-        )
-      }
-      let result = ''
-      for (const op of ops) {
-        switch (op.type) {
-          case DeltaType.Copy: {
-            result += base.slice(op.offset, op.offset + op.length)
-            continue
-          }
-          case DeltaType.Insert: {
-            result += op.data
-            continue
-          }
+  /** Recursive function to resolve delta */
+  private async reconstructFromDelta(blob: Uint8Array): Promise<string | null> {
+    const delta = await decompressBytes(blob.subarray(1))
+    const { base: baseHash, ops } = dedeltize(delta)
+    const base = await this.reconstruct(baseHash)
+    if (base === null)
+      throw new DeltizingError(
+        'Failed to construct base from hash ' + baseHash.toHex(),
+      )
+    let result = ''
+    for (const op of ops) {
+      switch (op.type) {
+        case DeltaType.Copy: {
+          result += base.slice(op.offset, op.offset + op.length)
+          continue
+        }
+        case DeltaType.Insert: {
+          result += op.data
+          continue
         }
       }
-      return Result.ok(result)
-    })
+    }
+    return result
   }
 
-  deltaChainCountCache = new LRUCache<BlobHash, number>({ max: 200 })
-  /** Get delta chain count */
-  private async getDeltaCount(hash: BlobHash): Promise<number> {
-    const cached = this.deltaChainCountCache.get(hash)
+  /** Get delta chain count for a baseHash that can be referencing a blob or delta, throwing an error if it could not be found */
+  async getDeltaCount(baseHash: BlobHash): Promise<number> {
+    const cached = this.deltaChainCountCache.get(baseHash)
     if (cached != null) {
       return cached
     }
 
-    // if delta doesnt exist return 0
-    const rawResult = await this.getCommitData(hash)
-    if (!rawResult.ok) return 0
-    const raw = rawResult.value
+    const raw = await this.lookup(baseHash)
+    if (raw === null)
+      throw new DeltizingError(
+        'Failed to construct base from hash ' + baseHash.toHex(),
+      )
+
+    const type = raw[0]
+    if (type === 0x00) {
+      this.deltaChainCountCache.set(baseHash, 0)
+      return 0
+    }
+    if (type !== 0x01) {
+      throw new DeltizingError(`Unknown data type: ${type}`)
+    }
     const delta = await decompressBytes(raw.subarray(1))
 
     // get count from base and add 1
     const base = Sha256Hash.fromBuffer(delta.slice(0, 32)) as BlobHash
     // chain count is previous + 1
-    const count = (await this.getDeltaCount(base)) + 1
-    this.deltaChainCountCache.set(hash, count)
+    const baseCount = await this.getDeltaCount(base)
+    const count = baseCount + 1
+    this.deltaChainCountCache.set(baseHash, count)
     return count
   }
 
   /** Return a compressed blob or delta */
-  construct(
-    value: string,
-    base?: BlobHash,
-  ): AsyncResult<
-    Uint8Array,
-    DeltizingError | StorageError | BlobNotFoundError
-  > {
-    return Result.fromAsync(async () => {
-      if (base) {
-        const baseResult = await this.reconstruct(base)
-        if (!baseResult.ok) return baseResult
-        const baseValue = baseResult.value
-        if (baseValue == null) {
-          return Result.error(
-            new DeltizingError(`Could not find base ${base.toSub()}`),
-          )
-        }
-        const count = await this.getDeltaCount(base)
-        if (count <= MAX_DELTA_CHAIN_COUNT) {
-          // Quick estimate of how different the strings are
-          const changeEstimate = estimateChangeSize(baseValue, value)
-
-          // If estimated change is too large (>80% different), skip deltize
-          if (changeEstimate < 0.8) {
-            const delta = deltize(base, baseValue, value)
-            const compressedDelta = await compressBytes(delta)
-            const deltaBytes = new Uint8Array(1 + compressedDelta.length)
-            deltaBytes[0] = 0x01
-            deltaBytes.set(compressedDelta, 1)
-            return Result.ok(deltaBytes)
-          }
-        }
+  async construct(value: string, base?: BlobHash): Promise<Uint8Array> {
+    if (base) {
+      const baseValue = await this.shouldStoreAsDelta(value, base)
+      if (baseValue !== false) {
+        const delta = deltize(base, baseValue, value)
+        const compressedDelta = await compressBytes(delta)
+        const deltaBytes = new Uint8Array(1 + compressedDelta.length)
+        deltaBytes[0] = 0x01
+        deltaBytes.set(compressedDelta, 1)
+        return deltaBytes
       }
+    }
 
-      const encoder = new TextEncoder()
-      const blob = encoder.encode(value)
-      const compressedBlob = await compressBytes(blob)
-      const blobBytes = new Uint8Array(1 + compressedBlob.length)
-      blobBytes[0] = 0x00
-      blobBytes.set(compressedBlob, 1)
-      return Result.ok(blobBytes)
-    })
+    const encoder = new TextEncoder()
+    const blob = encoder.encode(value)
+    const compressedBlob = await compressBytes(blob)
+    const blobBytes = new Uint8Array(1 + compressedBlob.length)
+    blobBytes[0] = 0x00
+    blobBytes.set(compressedBlob, 1)
+    return blobBytes
+  }
+
+  /**
+   * Estimate if the change is big enough that it should be stored as a delta
+   *
+   * @returns null if hash not found, false if should not be stored as delta, string with value of base if should be stored
+   * */
+  async shouldStoreAsDelta(
+    value: string,
+    base: BlobHash,
+  ): Promise<string | false> {
+    // skip deltize if value is very small
+    // minimum delta overhead is roughly:
+    // id + blob hash + 1 copy delta op + 1 insert delta op
+    // = 1 + 32 + 12 + ~14 bytes ~= 57 bytes
+    // use a conservative 64-byte cutoff by rounding that estimate up
+    if (value.length < 64) return false
+
+    const count = await this.getDeltaCount(base)
+    if (count > this.maxDeltaChainCount) {
+      return false
+    }
+
+    // Quick estimate of how different the strings are
+    const baseValue = await this.reconstruct(base)
+
+    if (baseValue === null)
+      throw new DeltizingError(
+        'Failed to construct base from hash ' + base.toHex(),
+      )
+
+    if (baseValue.length === 0) return false
+
+    const maxLen = Math.max(baseValue.length, value.length)
+    const lengthDiff = Math.abs(baseValue.length - value.length)
+    // if difference in length is bigger
+    if (lengthDiff / maxLen > 0.8) {
+      return false
+    }
+
+    const changeEstimate = changeSizeSamplingEstimate(baseValue, value, maxLen)
+    // if change is higher than 90% skip deltizing, estimation has high error
+    if (changeEstimate > 0.9) {
+      return false
+    }
+
+    return baseValue
   }
 }
 
@@ -184,18 +242,17 @@ async function decompressBytes(data: Uint8Array): Promise<Uint8Array> {
 
 /**
  * Quickly estimate how much two strings differ (0 = identical, 1 = completely different)
- * Uses fast heuristics: length difference, common prefix/suffix, and sampling
+ * Uses common prefix/suffix
  */
-function estimateChangeSize(base: string, value: string): number {
+function changeSizeSamplingEstimate(
+  base: string,
+  value: string,
+  maxLen: number,
+): number {
   if (base === value) return 0
   if (base.length === 0 || value.length === 0) return 1
 
-  const maxLen = Math.max(base.length, value.length)
   const minLen = Math.min(base.length, value.length)
-
-  // 1. Length difference gives lower bound on change
-  const lengthDiff = Math.abs(base.length - value.length)
-  const lengthScore = lengthDiff / maxLen
 
   // 2. Find common prefix length
   let prefixLen = 0
@@ -221,10 +278,7 @@ function estimateChangeSize(base: string, value: string): number {
 
   // Common content (as fraction of total)
   const commonLen = prefixLen + suffixLen
-  const commonScore = 1 - commonLen / maxLen
-
-  // Return the maximum of the two scores (most pessimistic estimate)
-  return Math.max(lengthScore, commonScore)
+  return 1 - commonLen / maxLen
 }
 
 /**

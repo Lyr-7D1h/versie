@@ -1,10 +1,9 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { ZodError } from 'zod'
 import { Bookmark, bookmarkSchema } from './Bookmarks'
-import { Deltizer, DeltizingError } from './Deltizer'
 import { Commit, CommitHash, BlobHash, MetaData, commitSchema } from './Commit'
 import { JsonValue, Storage } from './Storage'
-import { BlobNotFoundError } from './Versie'
+import { DeltizingError } from './Deltizer'
 
 export class StorageError extends Error {
   readonly type = 'storage-error'
@@ -29,34 +28,23 @@ export class ParseError extends Error {
   }
 }
 
-/** VCS Storage wrapper that handles efficient data storage and parsing */
-export class VersieStorage<M extends MetaData> {
-  private readonly deltizer: Deltizer
+export type VersieStorageError = StorageError | DeltizingError
 
+/** VCS Storage wrapper for parsing and error handling of storage data */
+export class VersieStorage<M extends MetaData> {
   constructor(
     private readonly storage: Storage<M>,
     private readonly parseMetadata: (raw: unknown) => M,
-  ) {
-    this.deltizer = new Deltizer((hash) => {
-      return Result.fromAsync(async () => {
-        try {
-          const data = await storage.getCommitData(hash)
-          if (data === null) return Result.error(new BlobNotFoundError(hash))
-          return Result.ok(data)
-        } catch (error) {
-          return Result.error(this.toStorageError(error))
-        }
-      })
-    })
-  }
+  ) {}
 
-  private toStorageError(error: unknown): StorageError {
+  private toStorageError(error: unknown): VersieStorageError {
     if (error instanceof StorageError) return error
+    if (error instanceof DeltizingError) return error
     if (error instanceof Error) return new StorageError(error)
     return new StorageError(new Error(String(error)))
   }
 
-  setBookmark(bookmark: Bookmark): AsyncResult<void, StorageError> {
+  setBookmark(bookmark: Bookmark): AsyncResult<void, VersieStorageError> {
     return Result.fromAsync(async () => {
       try {
         await this.storage.setBookmark(bookmark)
@@ -67,7 +55,7 @@ export class VersieStorage<M extends MetaData> {
     })
   }
 
-  removeBookmark(name: string): AsyncResult<void, StorageError> {
+  removeBookmark(name: string): AsyncResult<void, VersieStorageError> {
     return Result.fromAsync(async () => {
       try {
         await this.storage.removeBookmark(name)
@@ -82,7 +70,7 @@ export class VersieStorage<M extends MetaData> {
 
   getCommit(
     hash: CommitHash,
-  ): AsyncResult<Commit<M> | null, ParseError | StorageError> {
+  ): AsyncResult<Commit<M> | null, ParseError | VersieStorageError> {
     return Result.fromAsync(async () => {
       let raw: JsonValue | null
       try {
@@ -110,19 +98,25 @@ export class VersieStorage<M extends MetaData> {
     })
   }
 
-  getCommitData(hash: BlobHash) {
-    return this.deltizer.reconstruct(hash)
+  getCommitData(
+    hash: BlobHash,
+  ): AsyncResult<string | null, VersieStorageError> {
+    return Result.fromAsync(async () => {
+      try {
+        return Result.ok(await this.storage.getCommitData(hash))
+      } catch (error) {
+        return Result.error(this.toStorageError(error))
+      }
+    })
   }
 
   setCommit(
     commit: Commit<M>,
     data: string,
-  ): AsyncResult<void, StorageError | DeltizingError | BlobNotFoundError> {
+  ): AsyncResult<void, VersieStorageError> {
     return Result.fromAsync(async () => {
       try {
-        const deltized = await this.deltizer.construct(data)
-        if (!deltized.ok) return deltized
-        await this.storage.setCommit(commit, deltized.value)
+        await this.storage.setCommit(commit, data)
         return Result.ok()
       } catch (error) {
         return Result.error(this.toStorageError(error))
@@ -150,7 +144,7 @@ export class VersieStorage<M extends MetaData> {
     })
   }
 
-  getAllCommits(): AsyncResult<Commit<M>[], ParseError | StorageError> {
+  getAllCommits(): AsyncResult<Commit<M>[], ParseError | VersieStorageError> {
     return Result.fromAsync(async () => {
       let rawList: Awaited<ReturnType<Storage<M>['getAllCommits']>>
       try {

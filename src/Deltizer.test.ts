@@ -1,9 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import { Result } from 'typescript-result'
-import { Deltizer } from './Deltizer'
+import { Deltizer, DeltizingError, LRUDeltaChainCountCache } from './Deltizer'
 import { Sha256Hash } from './Sha256Hash'
 import { BlobHash } from './Commit'
-import { StorageError } from './VersieStorage'
 
 describe('Deltizer', () => {
   let blobStore: Map<string, Uint8Array>
@@ -19,26 +17,15 @@ describe('Deltizer', () => {
     content: string,
     base?: BlobHash,
   ): Promise<void> => {
-    const result = await deltizer.construct(content, base)
-    if (!result.ok) throw result.error
-    blobStore.set(hash.toBase64(), result.value)
+    const data = await deltizer.construct(content, base)
+    blobStore.set(hash.toBase64(), data)
   }
 
   beforeEach(() => {
     blobStore = new Map()
-    deltizer = new Deltizer((hash) =>
-      Result.fromAsync(async () => {
-        const data = blobStore.get(hash.toBase64())
-        if (data == null) {
-          return Promise.resolve(
-            Result.error(
-              new StorageError(new Error(`Blob not found: ${hash.toBase64()}`)),
-            ),
-          )
-        }
-        return Promise.resolve(Result.ok(data))
-      }),
-    )
+    deltizer = new Deltizer((hash) => {
+      return Promise.resolve(blobStore.get(hash.toBase64()) ?? null)
+    })
   })
 
   describe('Basic Blob Storage', () => {
@@ -47,16 +34,15 @@ describe('Deltizer', () => {
       const content = 'Hello, World!'
 
       await storeBlob(hash, content)
-      const retrieved = (await deltizer.reconstruct(hash)).value
+      const retrieved = await deltizer.reconstruct(hash)
 
       expect(retrieved).toBe(content)
     })
 
-    test('should return error for non-existent blob', async () => {
+    test('should throw for non-existent blob', async () => {
       const hash = await createHash('non-existent')
-      const result = await deltizer.reconstruct(hash)
 
-      expect(result.ok).toBe(false)
+      expect(await deltizer.reconstruct(hash)).toBe(null)
     })
 
     test('should store and retrieve large blobs', async () => {
@@ -64,7 +50,7 @@ describe('Deltizer', () => {
       const content = 'x'.repeat(100000) // 100KB of data
 
       await storeBlob(hash, content)
-      const retrieved = (await deltizer.reconstruct(hash)).value
+      const retrieved = await deltizer.reconstruct(hash)
 
       expect(retrieved).toBe(content)
     })
@@ -74,7 +60,7 @@ describe('Deltizer', () => {
       const content = 'Hello 👋 \n\t\r Special chars: 你好 🎉'
 
       await storeBlob(hash, content)
-      const retrieved = (await deltizer.reconstruct(hash)).value
+      const retrieved = await deltizer.reconstruct(hash)
 
       expect(retrieved).toBe(content)
     })
@@ -84,7 +70,7 @@ describe('Deltizer', () => {
       const content = ''
 
       await storeBlob(hash, content)
-      const retrieved = (await deltizer.reconstruct(hash)).value
+      const retrieved = await deltizer.reconstruct(hash)
 
       expect(retrieved).toBe(content)
     })
@@ -100,7 +86,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -117,7 +103,7 @@ describe('Deltizer', () => {
       await storeBlob(hash2, content2, hash1)
       await storeBlob(hash3, content3, hash2)
 
-      const retrieved = (await deltizer.reconstruct(hash3)).value
+      const retrieved = await deltizer.reconstruct(hash3)
       expect(retrieved).toBe(content3)
     })
 
@@ -130,7 +116,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -143,7 +129,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -157,7 +143,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -177,16 +163,28 @@ describe('Deltizer', () => {
       // The 51st item should be stored as a full blob, not a delta
       await storeBlob(hashes[51]!, 'content-51', hashes[50])
 
-      const retrieved = (await deltizer.reconstruct(hashes[51]!)).value
+      const retrieved = await deltizer.reconstruct(hashes[51]!)
       expect(retrieved).toBe('content-51')
     })
 
-    test('should return error if base is missing', async () => {
+    test('should throw if base is missing', async () => {
       const baseHash = await createHash('missing-base')
 
-      // construct fails because base doesn't exist in the store
-      const result = await deltizer.construct('content', baseHash)
-      expect(result.ok).toBe(false)
+      // construct throws because base doesn't exist in the store
+      await expect(
+        deltizer.construct(
+          `public class GenerateDummyCode {
+	public static void main(String[] args) {
+		String className = "Eben";
+		String newLine = "\n";
+		String tab = "\t";
+		String classStart = "public class " + className + " {";
+		String closeBracket = "}";
+		String mainStart = "public static void main(String[] args) {";
+		String dummyContent = "";`,
+          baseHash,
+        ),
+      ).rejects.toThrow(DeltizingError)
     })
   })
 
@@ -196,17 +194,27 @@ describe('Deltizer', () => {
       const hash2 = await createHash('cache-2')
       const hash3 = await createHash('cache-3')
 
-      await storeBlob(hash1, 'content-1')
-      await storeBlob(hash2, 'content-2', hash1)
-      await storeBlob(hash3, 'content-3', hash2)
+      await storeBlob(
+        hash1,
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.',
+      )
+      await storeBlob(
+        hash2,
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut Lasteore et dolore magna aliqua. minim veniam, quis nostrud Exter ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.',
+        hash1,
+      )
+      await storeBlob(
+        hash3,
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut Lasteore et dolore magna aliqua. minim veniam, quis nostrud Exter ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate Veasdf esse cillum dolore eu fugiat nulla pariatur. Jelsdfj sint occaecat cupidatat non Lasdf, sunt in culpa qui officia deserunt mollit anim id est laborum.',
+        hash2,
+      )
 
       // Access multiple times - should use cache
       await deltizer.reconstruct(hash3)
       await deltizer.reconstruct(hash3)
       await deltizer.reconstruct(hash3)
 
-      // Verify cache has the value
-      expect(deltizer.deltaChainCountCache.has(hash2)).toBe(true)
+      expect(deltizer.deltaChainCountCache.get(hash2)).toBe(1)
     })
   })
 
@@ -220,7 +228,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -233,7 +241,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
 
@@ -246,7 +254,7 @@ describe('Deltizer', () => {
       await storeBlob(baseHash, baseContent)
       await storeBlob(deltaHash, deltaContent, baseHash)
 
-      const retrieved = (await deltizer.reconstruct(deltaHash)).value
+      const retrieved = await deltizer.reconstruct(deltaHash)
       expect(retrieved).toBe(deltaContent)
     })
   })
@@ -257,9 +265,251 @@ describe('Deltizer', () => {
       const content = 'a'.repeat(10000)
 
       await storeBlob(hash, content)
-      const retrieved = (await deltizer.reconstruct(hash)).value
+      const retrieved = await deltizer.reconstruct(hash)
 
       expect(retrieved).toBe(content)
     })
+  })
+
+  describe('reconstruct edge cases', () => {
+    test('returns null for a missing hash', async () => {
+      const hash = await createHash('rec-null')
+      const result = await deltizer.reconstruct(hash)
+      expect(result).toBeNull()
+    })
+
+    test('throws DeltizingError for unknown data type byte', async () => {
+      const hash = await createHash('rec-bad-type')
+      blobStore.set(hash.toBase64(), new Uint8Array([0xff]))
+      await expect(deltizer.reconstruct(hash)).rejects.toThrow(DeltizingError)
+    })
+  })
+
+  describe('getDeltaCount', () => {
+    test('returns 0 for a full blob', async () => {
+      const hash = await createHash('gdc-full-blob')
+      await storeBlob(hash, 'content that is stored as a full blob')
+      expect(await deltizer.getDeltaCount(hash)).toBe(0)
+    })
+
+    test('returns 1 for a single-level delta', async () => {
+      const baseHash = await createHash('gdc-base')
+      const deltaHash = await createHash('gdc-delta')
+      const baseContent =
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo.'
+      const deltaContent =
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo.'
+      await storeBlob(baseHash, baseContent)
+      await storeBlob(deltaHash, deltaContent, baseHash)
+      expect(await deltizer.getDeltaCount(deltaHash)).toBe(1)
+    })
+
+    test('returns 2 for a two-level delta chain', async () => {
+      const h1 = await createHash('gdc-chain-1')
+      const h2 = await createHash('gdc-chain-2')
+      const h3 = await createHash('gdc-chain-3')
+      const c1 =
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.'
+      const c2 =
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.'
+      const c3 =
+        'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incidunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco labori.'
+      await storeBlob(h1, c1)
+      await storeBlob(h2, c2, h1)
+      await storeBlob(h3, c3, h2)
+      expect(await deltizer.getDeltaCount(h3)).toBe(2)
+    })
+
+    test('populates cache after computing count', async () => {
+      const hash = await createHash('gdc-cache-populate')
+      await storeBlob(hash, 'some content')
+      expect(deltizer.deltaChainCountCache.get(hash)).toBeUndefined()
+      await deltizer.getDeltaCount(hash)
+      expect(deltizer.deltaChainCountCache.get(hash)).toBe(0)
+    })
+
+    test('uses cached value on subsequent calls', async () => {
+      const hash = await createHash('gdc-cache-hit')
+      await storeBlob(hash, 'some content')
+      await deltizer.getDeltaCount(hash)
+      // Override cache to verify subsequent calls read from it
+      deltizer.deltaChainCountCache.set(hash, 99)
+      const count = await deltizer.getDeltaCount(hash)
+      expect(count).toBe(99)
+    })
+
+    test('throws DeltizingError when hash is not found', async () => {
+      const hash = await createHash('gdc-missing')
+      await expect(deltizer.getDeltaCount(hash)).rejects.toThrow(DeltizingError)
+    })
+
+    test('throws DeltizingError for unknown data type byte', async () => {
+      const hash = await createHash('gdc-unknown-type')
+      blobStore.set(hash.toBase64(), new Uint8Array([0x02, 0x00, 0x00, 0x00]))
+      await expect(deltizer.getDeltaCount(hash)).rejects.toThrow(DeltizingError)
+    })
+  })
+
+  describe('shouldStoreAsDelta', () => {
+    test('returns false for strings shorter than 64 characters', async () => {
+      const hash = await createHash('ssd-short')
+      await storeBlob(hash, 'x'.repeat(200))
+      const result = await deltizer.shouldStoreAsDelta('too short', hash)
+      expect(result).toBe(false)
+    })
+
+    test('returns false when delta chain count exceeds max', async () => {
+      const hash = await createHash('ssd-max-chain')
+      await storeBlob(hash, 'x'.repeat(200))
+      // Pre-populate cache to simulate a chain exceeding the 50-count max
+      deltizer.deltaChainCountCache.set(hash, 51)
+      const result = await deltizer.shouldStoreAsDelta('x'.repeat(100), hash)
+      expect(result).toBe(false)
+    })
+
+    test('returns false when base reconstructs to an empty string', async () => {
+      const hash = await createHash('ssd-empty-base')
+      await storeBlob(hash, '')
+      const result = await deltizer.shouldStoreAsDelta('x'.repeat(100), hash)
+      expect(result).toBe(false)
+    })
+
+    test('returns false when strings differ by more than 80% in length', async () => {
+      const hash = await createHash('ssd-length-diff')
+      const shortBase = 'short base content'
+      await storeBlob(hash, shortBase)
+      // Value is much longer than base: length diff exceeds 80% threshold
+      const longValue = 'a'.repeat(500)
+      const result = await deltizer.shouldStoreAsDelta(longValue, hash)
+      expect(result).toBe(false)
+    })
+
+    test('returns the reconstructed base string for sufficiently similar content', async () => {
+      const hash = await createHash('ssd-similar')
+      const baseContent =
+        'The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      await storeBlob(hash, baseContent)
+      const similarContent =
+        'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      const result = await deltizer.shouldStoreAsDelta(similarContent, hash)
+      expect(result).toBe(baseContent)
+    })
+
+    test('throws DeltizingError when base hash is not in the store', async () => {
+      const hash = await createHash('ssd-missing')
+      await expect(
+        deltizer.shouldStoreAsDelta('x'.repeat(100), hash),
+      ).rejects.toThrow(DeltizingError)
+    })
+  })
+
+  describe('construct output format', () => {
+    test('produces type byte 0x00 (blob) when no base is given', async () => {
+      const data = await deltizer.construct(
+        'some value to store without a base',
+      )
+      expect(data[0]).toBe(0x00)
+    })
+
+    test('produces type byte 0x01 (delta) for sufficiently similar base content', async () => {
+      const baseHash = await createHash('cof-delta-base')
+      const baseContent =
+        'The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      const baseData = await deltizer.construct(baseContent)
+      blobStore.set(baseHash.toBase64(), baseData)
+      const similarContent =
+        'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      const data = await deltizer.construct(similarContent, baseHash)
+      expect(data[0]).toBe(0x01)
+    })
+
+    test('produces type byte 0x00 (blob) when value is too short for a delta', async () => {
+      const baseHash = await createHash('cof-short-value')
+      const baseData = await deltizer.construct('base content')
+      blobStore.set(baseHash.toBase64(), baseData)
+      // 'short' is fewer than 64 chars — shouldStoreAsDelta returns false
+      const data = await deltizer.construct('short', baseHash)
+      expect(data[0]).toBe(0x00)
+    })
+
+    test('reconstruct round-trips constructed data correctly', async () => {
+      const baseHash = await createHash('cof-roundtrip-base')
+      const deltaHash = await createHash('cof-roundtrip-delta')
+      const baseContent =
+        'The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      const deltaContent =
+        'The quick brown cat jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt.'
+      const baseData = await deltizer.construct(baseContent)
+      blobStore.set(baseHash.toBase64(), baseData)
+      const deltaData = await deltizer.construct(deltaContent, baseHash)
+      blobStore.set(deltaHash.toBase64(), deltaData)
+      expect(await deltizer.reconstruct(deltaHash)).toBe(deltaContent)
+    })
+  })
+})
+
+describe('LRUDeltaChainCountCache', () => {
+  test('returns undefined for unknown keys', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hash = (await Sha256Hash.create('unknown-key')) as BlobHash
+    expect(cache.get(hash)).toBeUndefined()
+  })
+
+  test('stores and retrieves a value', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hash = (await Sha256Hash.create('stored-key')) as BlobHash
+    cache.set(hash, 7)
+    expect(cache.get(hash)).toBe(7)
+  })
+
+  test('overwrites an existing value for the same key', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hash = (await Sha256Hash.create('overwrite-key')) as BlobHash
+    cache.set(hash, 1)
+    cache.set(hash, 10)
+    expect(cache.get(hash)).toBe(10)
+  })
+
+  test('stores zero as a valid count', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hash = (await Sha256Hash.create('zero-key')) as BlobHash
+    cache.set(hash, 0)
+    expect(cache.get(hash)).toBe(0)
+  })
+
+  test('keeps separate entries for different keys', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hash1 = (await Sha256Hash.create('key-a')) as BlobHash
+    const hash2 = (await Sha256Hash.create('key-b')) as BlobHash
+    cache.set(hash1, 3)
+    cache.set(hash2, 7)
+    expect(cache.get(hash1)).toBe(3)
+    expect(cache.get(hash2)).toBe(7)
+  })
+
+  test('evicts the least-recently-used entry when max size is exceeded', async () => {
+    const cache = new LRUDeltaChainCountCache(2)
+    const hash1 = (await Sha256Hash.create('lru-1')) as BlobHash
+    const hash2 = (await Sha256Hash.create('lru-2')) as BlobHash
+    const hash3 = (await Sha256Hash.create('lru-3')) as BlobHash
+    cache.set(hash1, 1)
+    cache.set(hash2, 2)
+    // Adding hash3 should evict hash1 (the LRU entry)
+    cache.set(hash3, 3)
+    expect(cache.get(hash1)).toBeUndefined()
+    expect(cache.get(hash2)).toBe(2)
+    expect(cache.get(hash3)).toBe(3)
+  })
+
+  test('uses default max of 200 entries', async () => {
+    const cache = new LRUDeltaChainCountCache()
+    const hashes: BlobHash[] = []
+    for (let i = 0; i < 200; i++) {
+      hashes.push((await Sha256Hash.create(`fill-${i}`)) as BlobHash)
+      cache.set(hashes[i]!, i)
+    }
+    // All 200 entries should still be present
+    expect(cache.get(hashes[0]!)).toBe(0)
+    expect(cache.get(hashes[199]!)).toBe(199)
   })
 })

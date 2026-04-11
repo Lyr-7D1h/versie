@@ -1,42 +1,42 @@
-import { z } from "zod";
-import { Sha256Hash, sha256HashSchema } from "./Sha256Hash";
-import { JsonValue } from "./Storage";
-import { Tagged } from "./Tagged";
+import { z } from 'zod'
+import { Sha256Hash, sha256HashSchema } from './Sha256Hash'
+import { JsonValue } from './Storage'
+import { Tagged } from './Tagged'
 
 export const commitHashSchema = sha256HashSchema as z.ZodPipe<
   z.ZodString,
   z.ZodTransform<CommitHash, string>
->;
-export type CommitHash = Tagged<Sha256Hash, "CommitHash">;
+>
+export type CommitHash = Tagged<Sha256Hash, 'CommitHash'>
 
 export const blobHashSchema = sha256HashSchema as z.ZodPipe<
   z.ZodString,
   z.ZodTransform<BlobHash, string>
->;
-export type BlobHash = Tagged<Sha256Hash, "BlobHash">;
+>
+export type BlobHash = Tagged<Sha256Hash, 'BlobHash'>
 
 export const dateNumberSchema = z
   .number()
-  .refine((epoch) => !isNaN(new Date(epoch).getTime()), "Invalid timestamp")
-  .transform((n) => new Date(n));
+  .refine((epoch) => !isNaN(new Date(epoch).getTime()), 'Invalid timestamp')
+  .transform((n) => new Date(n))
 export const commitSchema = z.object({
   blob: blobHashSchema,
   parent: commitHashSchema.optional(),
   createdOn: dateNumberSchema,
   metadata: z.unknown(),
-});
+})
 
 export interface _MetaData {
-  toJson(): JsonValue;
+  toJson(): JsonValue
   /**
    * Return true when `this` is the same as `meta`
    *
    * NOTE: metadata has to change in order to commit
    */
-  compare(meta: this): boolean;
+  compare(meta: this): boolean
 }
 
-export type MetaData = _MetaData | undefined;
+export type MetaData = _MetaData | undefined
 
 /**
  * Commit of a change made: [64 byte hash][hex encoded Extension]
@@ -64,33 +64,33 @@ export class Commit<M extends MetaData> {
     parent?: CommitHash,
   ): Promise<Commit<M>> {
     const hash = (await Sha256Hash.create(
-      `${blob.toBase64()}${createdOn.getTime()}${parent?.toBase64() ?? ""}${typeof metadata !== "undefined" ? JSON.stringify(metadata.toJson()) : ""}`,
-    )) as CommitHash;
+      `${blob.toBase64()}${createdOn.getTime()}${parent?.toBase64() ?? ''}${typeof metadata !== 'undefined' ? JSON.stringify(metadata.toJson()) : ''}`,
+    )) as CommitHash
 
-    return new Commit(hash, blob, createdOn, metadata, parent);
+    return new Commit(hash, blob, createdOn, metadata, parent)
   }
 
   /** Get a json serializable object with only primitive types */
   toJson(): {
-    blob: string;
-    createdOn: number;
-    parent?: string;
-    metadata?: JsonValue;
+    blob: string
+    createdOn: number
+    parent?: string
+    metadata?: JsonValue
   } {
-    const { metadata, blob, parent, createdOn } = this;
+    const { metadata, blob, parent, createdOn } = this
     return {
       blob: blob.toHex(),
       createdOn: createdOn.getTime(),
       parent: parent?.toHex(),
       ...(metadata ? { metadata: metadata.toJson() } : {}),
-    };
+    }
   }
 
   toSub() {
-    return this.hash.toSub();
+    return this.hash.toSub()
   }
 
   toHex() {
-    return this.hash.toHex();
+    return this.hash.toHex()
   }
 }
