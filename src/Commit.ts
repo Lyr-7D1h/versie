@@ -38,6 +38,12 @@ export interface _MetaData {
 
 export type MetaData = _MetaData | undefined
 
+export interface CommitJson {
+  blob: string
+  createdOn: number
+  metadata?: JsonValue
+  parent?: string
+}
 /**
  * Commit of a change made: [64 byte hash][hex encoded Extension]
  */
@@ -71,12 +77,7 @@ export class Commit<M extends MetaData> {
   }
 
   /** Get a json serializable object with only primitive types */
-  toJson(): {
-    blob: string
-    createdOn: number
-    parent?: string
-    metadata?: JsonValue
-  } {
+  toJson(): CommitJson {
     const { metadata, blob, parent, createdOn } = this
     return {
       blob: blob.toHex(),

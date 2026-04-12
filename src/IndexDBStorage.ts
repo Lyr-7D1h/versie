@@ -1,7 +1,7 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { JsonValue, Storage, StorageCheckout } from './Storage'
-import { BlobHash, Commit, CommitHash, MetaData } from './Commit'
-import { Bookmark } from './Bookmarks'
+import { BlobHash, Commit, CommitHash, CommitJson, MetaData } from './Commit'
+import { Bookmark, BookmarkJson } from './Bookmark'
 import { Sha256Hash } from './Sha256Hash'
 import { Deltizer } from './Deltizer'
 
@@ -169,8 +169,8 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         )
   }
 
-  getCommit(hash: CommitHash): Promise<JsonValue | null> {
-    return this._get(COMMITS_STORE, hash) as Promise<JsonValue>
+  getCommit(hash: CommitHash): Promise<CommitJson | null> {
+    return this._get(COMMITS_STORE, hash) as Promise<CommitJson | null>
   }
   async getCommitData(hash: BlobHash): Promise<string | null> {
     return this.deltizer.reconstruct(hash)
@@ -192,6 +192,13 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
 
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
+  }
+
+  setCommitDataOnly(blobHash: BlobHash, value: Uint8Array) {
+    return this._set(BLOB_STORE, blobHash, value)
+  }
+  setCommitOnly(commit: Commit<M>): Promise<void> {
+    return this._set(COMMITS_STORE, commit.hash, commit.toJson())
   }
   async setCommit(commit: Commit<M>, data: string): Promise<void> {
     let parentBlobHash: BlobHash | undefined
@@ -239,11 +246,11 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   getBookmark(name: string): Promise<JsonValue | null> {
     return this._get(BOOKMARKS_STORE, name) as Promise<JsonValue | null>
   }
-  getAllBookmarks(): Promise<JsonValue[]> {
-    return this._getAll(BOOKMARKS_STORE)
+  getAllBookmarks(): Promise<BookmarkJson[]> {
+    return this._getAll(BOOKMARKS_STORE) as unknown as Promise<BookmarkJson[]>
   }
-  getAllCommits(): Promise<JsonValue[]> {
-    return this._getAll(COMMITS_STORE)
+  getAllCommits(): Promise<CommitJson[]> {
+    return this._getAll(COMMITS_STORE) as unknown as Promise<CommitJson[]>
   }
 
   private async _set(storeName: string, id: IDBValidKey, value: unknown) {

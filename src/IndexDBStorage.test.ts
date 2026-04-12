@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
 import { IndexDBStorage } from './IndexDBStorage'
 import { Commit } from './Commit'
-import { Bookmark } from './Bookmarks'
+import { Bookmark } from './Bookmark'
 import { Sha256Hash } from './Sha256Hash'
 import type { BlobHash } from './Commit'
 

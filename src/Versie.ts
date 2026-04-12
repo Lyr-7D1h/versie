@@ -4,8 +4,8 @@ import {
   Bookmarks,
   BookmarkNotFoundError,
   BookmarkAlreadyExistsError,
-} from './Bookmarks'
-export { BookmarkAlreadyExistsError } from './Bookmarks'
+} from './Bookmark'
+export { BookmarkAlreadyExistsError } from './Bookmark'
 import { Storage } from './Storage'
 import { AsyncResult, Result } from 'typescript-result'
 import {

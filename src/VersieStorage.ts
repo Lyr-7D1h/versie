@@ -1,8 +1,15 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { ZodError } from 'zod'
-import { Bookmark, bookmarkSchema } from './Bookmarks'
-import { Commit, CommitHash, BlobHash, MetaData, commitSchema } from './Commit'
-import { JsonValue, Storage } from './Storage'
+import { Bookmark, bookmarkSchema } from './Bookmark'
+import {
+  Commit,
+  CommitHash,
+  BlobHash,
+  MetaData,
+  commitSchema,
+  CommitJson,
+} from './Commit'
+import { Storage } from './Storage'
 import { DeltizingError } from './Deltizer'
 
 export class StorageError extends Error {
@@ -72,7 +79,7 @@ export class VersieStorage<M extends MetaData> {
     hash: CommitHash,
   ): AsyncResult<Commit<M> | null, ParseError | VersieStorageError> {
     return Result.fromAsync(async () => {
-      let raw: JsonValue | null
+      let raw: CommitJson | null
       try {
         raw = await this.storage.getCommit(hash)
       } catch (error) {

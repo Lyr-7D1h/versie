@@ -1,17 +1,20 @@
-import { Bookmark } from './Bookmarks'
-import { CommitHash, BlobHash, Commit, MetaData } from './Commit'
+import { Bookmark, BookmarkJson } from './Bookmark'
+import { CommitHash, BlobHash, Commit, MetaData, CommitJson } from './Commit'
 
 export type JsonPrimitive = string | number | boolean
 export type JsonValue =
   | JsonPrimitive
   | (JsonValue | null)[]
   | { [key: string]: JsonValue | null }
-export type StorageCheckout = { commit: JsonValue; data: string }
+export type StorageCheckout = {
+  commit: CommitJson
+  data: string
+}
 
 /** Generic storage interface for fetching and storing vcs objects */
 export interface Storage<M extends MetaData> {
   /** Get a single commit */
-  getCommit(hash: CommitHash): Promise<JsonValue | null>
+  getCommit(hash: CommitHash): Promise<CommitJson | null>
   /** Return the full commit data */
   getCommitData(hash: BlobHash): Promise<string | null>
   /** Performance improved to get commit and commit data at same time */
@@ -26,7 +29,7 @@ export interface Storage<M extends MetaData> {
   removeBookmark(name: string): Promise<void>
 
   /** Get all commits */
-  getAllCommits(): Promise<JsonValue[]>
+  getAllCommits(): Promise<CommitJson[]>
   /** Get all bookmarks */
-  getAllBookmarks(): Promise<JsonValue[]>
+  getAllBookmarks(): Promise<BookmarkJson[]>
 }

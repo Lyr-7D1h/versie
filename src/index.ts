@@ -1,6 +1,6 @@
 export * from './Deltizer'
 export * from './BloomFilter'
-export * from './Bookmarks'
+export * from './Bookmark'
 export * from './Commit'
 export * from './IndexDBStorage'
 export * from './Sha256Hash'

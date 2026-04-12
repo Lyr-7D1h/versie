@@ -1,16 +1,16 @@
 import { describe, test, expect } from 'vitest'
 import { Versie } from './Versie'
-import { JsonValue, Storage, StorageCheckout } from './Storage'
-import { Bookmark } from './Bookmarks'
-import { BlobHash, Commit, CommitHash } from './Commit'
+import { Storage, StorageCheckout } from './Storage'
+import { Bookmark, BookmarkJson } from './Bookmark'
+import { BlobHash, Commit, CommitHash, CommitJson } from './Commit'
 
 /** Simple in-memory Storage implementation for testing */
 class MemoryStorage implements Storage<undefined> {
-  private readonly bookmarks = new Map<string, JsonValue>()
-  private readonly commits = new Map<string, JsonValue>()
+  private readonly bookmarks = new Map<string, BookmarkJson>()
+  private readonly commits = new Map<string, CommitJson>()
   private readonly commitData = new Map<string, string>()
 
-  getCommit(id: CommitHash): Promise<JsonValue | null> {
+  getCommit(id: CommitHash): Promise<CommitJson | null> {
     return Promise.resolve(this.commits.get(id.toHex()) ?? null)
   }
 
@@ -21,11 +21,8 @@ class MemoryStorage implements Storage<undefined> {
   getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
     const commit = this.commits.get(hash.toHex())
     if (commit === undefined) return Promise.resolve(null)
-    const commitJson = commit as { blob?: string }
-    const blobHex =
-      typeof commitJson.blob === 'string' ? commitJson.blob : undefined
-    const data =
-      blobHex !== undefined ? this.commitData.get(blobHex) : undefined
+    const blobHex = commit.blob
+    const data = this.commitData.get(blobHex)
     if (data === undefined) return Promise.resolve(null)
     return Promise.resolve({ commit, data })
   }
@@ -46,11 +43,11 @@ class MemoryStorage implements Storage<undefined> {
     return Promise.resolve()
   }
 
-  getAllBookmarks(): Promise<JsonValue[]> {
+  getAllBookmarks(): Promise<BookmarkJson[]> {
     return Promise.resolve([...this.bookmarks.values()])
   }
 
-  getAllCommits(): Promise<JsonValue[]> {
+  getAllCommits(): Promise<CommitJson[]> {
     return Promise.resolve([...this.commits.values()])
   }
 }

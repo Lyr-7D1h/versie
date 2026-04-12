@@ -31,6 +31,11 @@ export const bookmarkSchema = z
     return new Bookmark(name, commit, createdOn)
   })
 
+export interface BookmarkJson {
+  name: string
+  commit: string
+  createdOn: number
+}
 export class Bookmark {
   constructor(
     /** Unique bookmark name */
@@ -39,7 +44,7 @@ export class Bookmark {
     readonly createdOn: Date,
   ) {}
 
-  toJson() {
+  toJson(): BookmarkJson {
     return {
       name: this.name,
       commit: this.commit.toHex(),
