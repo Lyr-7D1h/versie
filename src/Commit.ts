@@ -39,14 +39,15 @@ export interface CommitMetadataInterface<TJson extends JsonValue = JsonValue> {
 export type MetaData = CommitMetadataInterface | undefined
 
 /** Extracts the JSON shape of metadata from a MetaData type parameter */
-export type MetaJsonOf<M extends MetaData> = M extends CommitMetadataInterface<infer TJson>
-  ? TJson
-  : undefined
+export type MetaJsonOf<M extends MetaData> =
+  M extends CommitMetadataInterface<infer TJson> ? TJson : undefined
 
-export interface CommitJson<TMeta extends JsonValue | undefined = JsonValue | undefined> {
+export interface CommitJson<
+  TMeta extends JsonValue | undefined = JsonValue | undefined,
+> {
   blob: string
   createdOn: number
-  metadata?: TMeta
+  metadata: TMeta
   parent?: string
 }
 /**
