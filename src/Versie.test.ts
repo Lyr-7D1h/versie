@@ -7,10 +7,10 @@ import { BlobHash, Commit, CommitHash, CommitJson } from './Commit'
 /** Simple in-memory Storage implementation for testing */
 class MemoryStorage implements Storage {
   private readonly bookmarks = new Map<string, BookmarkJson>()
-  private readonly commits = new Map<string, CommitJson>()
+  private readonly commits = new Map<string, CommitJson<undefined>>()
   private readonly commitData = new Map<string, string>()
 
-  getCommit(id: CommitHash): Promise<CommitJson | null> {
+  getCommit(id: CommitHash): Promise<CommitJson<undefined> | null> {
     return Promise.resolve(this.commits.get(id.toHex()) ?? null)
   }
 
@@ -18,7 +18,7 @@ class MemoryStorage implements Storage {
     return Promise.resolve(this.commitData.get(hash.toHex()) ?? null)
   }
 
-  getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
+  getCheckout(hash: CommitHash): Promise<StorageCheckout<undefined> | null> {
     const commit = this.commits.get(hash.toHex())
     if (commit === undefined) return Promise.resolve(null)
     const blobHex = commit.blob
@@ -47,7 +47,7 @@ class MemoryStorage implements Storage {
     return Promise.resolve([...this.bookmarks.values()])
   }
 
-  getAllCommits(): Promise<CommitJson[]> {
+  getAllCommits(): Promise<CommitJson<undefined>[]> {
     return Promise.resolve([...this.commits.values()])
   }
 }

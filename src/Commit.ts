@@ -26,8 +26,8 @@ export const commitSchema = z.object({
   metadata: z.unknown(),
 })
 
-export interface CommitMetadataInterface {
-  toJson(): JsonValue
+export interface CommitMetadataInterface<TJson extends JsonValue = JsonValue> {
+  toJson(): TJson
   /**
    * Return true when `this` is the same as `meta`
    *
@@ -38,10 +38,15 @@ export interface CommitMetadataInterface {
 
 export type MetaData = CommitMetadataInterface | undefined
 
-export interface CommitJson {
+/** Extracts the JSON shape of metadata from a MetaData type parameter */
+export type MetaJsonOf<M extends MetaData> = M extends CommitMetadataInterface<infer TJson>
+  ? TJson
+  : undefined
+
+export interface CommitJson<TMeta extends JsonValue | undefined = JsonValue | undefined> {
   blob: string
   createdOn: number
-  metadata?: JsonValue
+  metadata?: TMeta
   parent?: string
 }
 /**
@@ -77,7 +82,7 @@ export class Commit<M extends MetaData = undefined> {
   }
 
   /** Get a json serializable object with only primitive types */
-  toJson(): CommitJson {
+  toJson(): CommitJson<MetaJsonOf<M>> {
     const { metadata, blob, parent, createdOn } = this
     const res = {
       blob: blob.toHex(),
@@ -85,7 +90,7 @@ export class Commit<M extends MetaData = undefined> {
       parent: parent?.toHex(),
       ...(metadata ? { metadata: metadata.toJson() } : {}),
     }
-    return res
+    return res as CommitJson<MetaJsonOf<M>>
   }
 
   toSub() {

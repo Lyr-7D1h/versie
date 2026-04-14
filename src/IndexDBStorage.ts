@@ -1,6 +1,6 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { JsonValue, Storage, StorageCheckout } from './Storage'
-import { BlobHash, Commit, CommitHash, CommitJson, MetaData } from './Commit'
+import { BlobHash, Commit, CommitHash, CommitJson, MetaData, MetaJsonOf } from './Commit'
 import { Bookmark, BookmarkJson } from './Bookmark'
 import { Sha256Hash } from './Sha256Hash'
 import { Deltizer } from './Deltizer'
@@ -169,13 +169,13 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         )
   }
 
-  getCommit(hash: CommitHash): Promise<CommitJson | null> {
-    return this._get(COMMITS_STORE, hash) as Promise<CommitJson | null>
+  getCommit(hash: CommitHash): Promise<CommitJson<MetaJsonOf<M>> | null> {
+    return this._get(COMMITS_STORE, hash) as Promise<CommitJson<MetaJsonOf<M>> | null>
   }
   async getCommitData(hash: BlobHash): Promise<string | null> {
     return this.deltizer.reconstruct(hash)
   }
-  async getCheckout(hash: CommitHash): Promise<StorageCheckout | null> {
+  async getCheckout(hash: CommitHash): Promise<StorageCheckout<MetaJsonOf<M>> | null> {
     const commit = await this.getCommit(hash)
     if (commit === null) return null
     if (
@@ -249,8 +249,8 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   getAllBookmarks(): Promise<BookmarkJson[]> {
     return this._getAll(BOOKMARKS_STORE) as unknown as Promise<BookmarkJson[]>
   }
-  getAllCommits(): Promise<CommitJson[]> {
-    return this._getAll(COMMITS_STORE) as unknown as Promise<CommitJson[]>
+  getAllCommits(): Promise<CommitJson<MetaJsonOf<M>>[]> {
+    return this._getAll(COMMITS_STORE) as unknown as Promise<CommitJson<MetaJsonOf<M>>[]>
   }
 
   private async _set(storeName: string, id: IDBValidKey, value: unknown) {
