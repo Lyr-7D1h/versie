@@ -11,6 +11,7 @@ import {
 } from './Commit'
 import { Storage } from './Storage'
 import { DeltizingError } from './Deltizer'
+import { Checkout } from './Versie'
 
 export class StorageError extends Error {
   readonly type = 'storage-error'
@@ -74,6 +75,33 @@ export class VersieStorage<M extends MetaData> {
   }
 
   // --- Commits ---
+  getCheckout(
+    hash: CommitHash,
+  ): AsyncResult<Checkout<M> | null, ParseError | VersieStorageError> {
+    return Result.fromAsync(async () => {
+      try {
+        const checkout = await this.storage.getCheckout(hash)
+        if (checkout === null) return Result.ok(null)
+
+        const commit = commitSchema.safeParse(checkout.commit)
+        if (!commit.success) return Result.error(new ParseError(commit.error))
+        const metadata = this.parseMetadata(commit.data.metadata)
+
+        return Result.ok({
+          commit: new Commit(
+            hash,
+            commit.data.blob,
+            commit.data.createdOn,
+            metadata,
+            commit.data.parent,
+          ),
+          data: checkout.data,
+        })
+      } catch (error) {
+        return Result.error(this.toStorageError(error))
+      }
+    })
+  }
 
   getCommit(
     hash: CommitHash,

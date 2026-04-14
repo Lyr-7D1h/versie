@@ -220,25 +220,24 @@ export class Versie<M extends MetaData> {
     | DeltizingError
   > {
     return Result.fromAsync(async () => {
-      let commit =
-        hash === this._head?.hash // use head if it matches to prevent storage call
-          ? this._head
-          : null
-      if (commit === null) {
-        const commitResult = await this.storage.getCommit(hash)
-        if (!commitResult.ok) return commitResult
-        commit = commitResult.value
+      // if commit is head just get commit data
+      if (this._head && hash.compare(this._head.hash)) {
+        const blobResult = await this.storage.getCommitData(this._head.blob)
+        if (!blobResult.ok) return blobResult
+        const data = blobResult.value
+        if (data === null)
+          return Result.error(new BlobNotFoundError(this._head.blob))
+        return Result.ok({ commit: this._head, data })
       }
-      if (commit === null) return Result.error(new CommitNotFoundError(hash))
-      const blobResult = await this.storage.getCommitData(commit.blob)
-      if (!blobResult.ok) return blobResult
 
-      const data = blobResult.value
-      if (data === null) return Result.error(new BlobNotFoundError(commit.blob))
+      const checkoutResult = await this.storage.getCheckout(hash)
+      if (!checkoutResult.ok) return checkoutResult
+      const checkout = checkoutResult.value
+      if (checkout === null) return Result.error(new CommitNotFoundError(hash))
 
-      this._head = commit
+      this._head = checkout.commit
 
-      return Result.ok({ commit, data })
+      return Result.ok(checkout)
     })
   }
 }

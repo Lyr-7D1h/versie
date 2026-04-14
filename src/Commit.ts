@@ -26,7 +26,7 @@ export const commitSchema = z.object({
   metadata: z.unknown(),
 })
 
-export interface _MetaData {
+export interface CommitMetadataInterface {
   toJson(): JsonValue
   /**
    * Return true when `this` is the same as `meta`
@@ -36,7 +36,7 @@ export interface _MetaData {
   compare(meta: this): boolean
 }
 
-export type MetaData = _MetaData | undefined
+export type MetaData = CommitMetadataInterface | undefined
 
 export interface CommitJson {
   blob: string
@@ -47,7 +47,7 @@ export interface CommitJson {
 /**
  * Commit of a change made: [64 byte hash][hex encoded Extension]
  */
-export class Commit<M extends MetaData> {
+export class Commit<M extends MetaData = undefined> {
   constructor(
     readonly hash: CommitHash,
     /** Hash of the blob of code */
@@ -79,12 +79,13 @@ export class Commit<M extends MetaData> {
   /** Get a json serializable object with only primitive types */
   toJson(): CommitJson {
     const { metadata, blob, parent, createdOn } = this
-    return {
+    const res = {
       blob: blob.toHex(),
       createdOn: createdOn.getTime(),
       parent: parent?.toHex(),
       ...(metadata ? { metadata: metadata.toJson() } : {}),
     }
+    return res
   }
 
   toSub() {

@@ -12,7 +12,7 @@ export type StorageCheckout = {
 }
 
 /** Generic storage interface for fetching and storing vcs objects */
-export interface Storage<M extends MetaData> {
+export interface Storage<M extends MetaData = undefined> {
   /** Get a single commit */
   getCommit(hash: CommitHash): Promise<CommitJson | null>
   /** Return the full commit data */

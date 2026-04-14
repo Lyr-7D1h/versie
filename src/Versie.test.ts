@@ -5,7 +5,7 @@ import { Bookmark, BookmarkJson } from './Bookmark'
 import { BlobHash, Commit, CommitHash, CommitJson } from './Commit'
 
 /** Simple in-memory Storage implementation for testing */
-class MemoryStorage implements Storage<undefined> {
+class MemoryStorage implements Storage {
   private readonly bookmarks = new Map<string, BookmarkJson>()
   private readonly commits = new Map<string, CommitJson>()
   private readonly commitData = new Map<string, string>()
@@ -32,7 +32,7 @@ class MemoryStorage implements Storage<undefined> {
     return Promise.resolve()
   }
 
-  setCommit(commit: Commit<undefined>, data: string): Promise<void> {
+  setCommit(commit: Commit, data: string): Promise<void> {
     this.commits.set(commit.hash.toHex(), commit.toJson())
     this.commitData.set(commit.blob.toHex(), data)
     return Promise.resolve()

@@ -1,5 +1,4 @@
 export * from './Deltizer'
-export * from './BloomFilter'
 export * from './Bookmark'
 export * from './Commit'
 export * from './IndexDBStorage'
