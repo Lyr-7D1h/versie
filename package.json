@@ -1,6 +1,6 @@
 {
   "name": "versie",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "A simple and adaptive version management library",
   "author": "Lyr",
   "license": "Apache-2.0",
@@ -10,7 +10,7 @@
     "vcs"
   ],
   "repository": {
-    "url": "https://github.com/lyr-7d1h/versie"
+    "url": "git+https://github.com/lyr-7d1h/versie"
   },
   "main": "dist/versie.cjs",
   "module": "dist/versie.mjs",

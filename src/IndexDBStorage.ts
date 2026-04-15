@@ -218,9 +218,9 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
-  setCommitDataOnly(blobHash: BlobHash, data: string) {
-    const compressed = this.deltizer.construct(data)
-    return this._set(BLOB_STORE, blobHash, compressed)
+  async setCommitDataOnly(blobHash: BlobHash, data: string) {
+    const { data: bytes } = await this.deltizer.construct(data)
+    await this._set(BLOB_STORE, blobHash, bytes)
   }
   setCommitOnly(commit: Commit<M>): Promise<void> {
     return this._set(COMMITS_STORE, commit.hash, commit.toJson())
@@ -238,7 +238,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         parentBlobHash = Sha256Hash.fromHex(parentCommit['blob']) as BlobHash
       }
     }
-    const bytes = await this.deltizer.construct(data, parentBlobHash)
+    const { data: bytes } = await this.deltizer.construct(data, parentBlobHash)
     const trans = this.db.transaction([COMMITS_STORE, BLOB_STORE], 'readwrite')
     await new Promise<void>((resolve, reject) => {
       trans.oncomplete = () => {
@@ -257,7 +257,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.put(bytes.data, commit.blob)
+      const blobReq = blobsStore.put(bytes, commit.blob)
       blobReq.onerror = () => {
         reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
       }
