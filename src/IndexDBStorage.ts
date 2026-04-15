@@ -1,6 +1,13 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { JsonValue, Storage, StorageCheckout } from './Storage'
-import { BlobHash, Commit, CommitHash, CommitJson, MetaData, MetaJsonOf } from './Commit'
+import {
+  BlobHash,
+  Commit,
+  CommitHash,
+  CommitJson,
+  MetaData,
+  MetaJsonOf,
+} from './Commit'
 import { Bookmark, BookmarkJson } from './Bookmark'
 import { Sha256Hash } from './Sha256Hash'
 import { Deltizer } from './Deltizer'
@@ -170,12 +177,16 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   }
 
   getCommit(hash: CommitHash): Promise<CommitJson<MetaJsonOf<M>> | null> {
-    return this._get(COMMITS_STORE, hash) as Promise<CommitJson<MetaJsonOf<M>> | null>
+    return this._get(COMMITS_STORE, hash) as Promise<CommitJson<
+      MetaJsonOf<M>
+    > | null>
   }
   async getCommitData(hash: BlobHash): Promise<string | null> {
     return this.deltizer.reconstruct(hash)
   }
-  async getCheckout(hash: CommitHash): Promise<StorageCheckout<MetaJsonOf<M>> | null> {
+  async getCheckout(
+    hash: CommitHash,
+  ): Promise<StorageCheckout<MetaJsonOf<M>> | null> {
     const commit = await this.getCommit(hash)
     if (commit === null) return null
     if (
@@ -189,13 +200,27 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     if (data === null) return null
     return { commit, data }
   }
+  getBookmark(name: string): Promise<JsonValue | null> {
+    return this._get(BOOKMARKS_STORE, name) as Promise<JsonValue | null>
+  }
+  getAllBookmarks(): Promise<BookmarkJson[]> {
+    return this._getAll(BOOKMARKS_STORE) as unknown as Promise<BookmarkJson[]>
+  }
+  getAllCommits(): Promise<CommitJson<MetaJsonOf<M>>[]> {
+    return this._getAll(COMMITS_STORE) as unknown as Promise<
+      CommitJson<MetaJsonOf<M>>[]
+    >
+  }
 
+  removeBookmark(id: string): Promise<void> {
+    return this._delete(BOOKMARKS_STORE, id)
+  }
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this._set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
-
-  setCommitDataOnly(blobHash: BlobHash, value: Uint8Array) {
-    return this._set(BLOB_STORE, blobHash, value)
+  setCommitDataOnly(blobHash: BlobHash, data: string) {
+    const compressed = this.deltizer.construct(data)
+    return this._set(BLOB_STORE, blobHash, compressed)
   }
   setCommitOnly(commit: Commit<M>): Promise<void> {
     return this._set(COMMITS_STORE, commit.hash, commit.toJson())
@@ -237,20 +262,6 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
       }
     })
-  }
-
-  removeBookmark(id: string): Promise<void> {
-    return this._delete(BOOKMARKS_STORE, id)
-  }
-
-  getBookmark(name: string): Promise<JsonValue | null> {
-    return this._get(BOOKMARKS_STORE, name) as Promise<JsonValue | null>
-  }
-  getAllBookmarks(): Promise<BookmarkJson[]> {
-    return this._getAll(BOOKMARKS_STORE) as unknown as Promise<BookmarkJson[]>
-  }
-  getAllCommits(): Promise<CommitJson<MetaJsonOf<M>>[]> {
-    return this._getAll(COMMITS_STORE) as unknown as Promise<CommitJson<MetaJsonOf<M>>[]>
   }
 
   private async _set(storeName: string, id: IDBValidKey, value: unknown) {
