@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest'
 import { Versie } from './Versie'
-import { Storage, StorageCheckout } from './Storage'
+import { Storage } from './Storage'
 import { Bookmark, BookmarkJson } from './Bookmark'
 import { BlobHash, Commit, CommitHash, CommitJson } from './Commit'
 
@@ -16,15 +16,6 @@ class MemoryStorage implements Storage {
 
   getCommitData(hash: BlobHash): Promise<string | null> {
     return Promise.resolve(this.commitData.get(hash.toHex()) ?? null)
-  }
-
-  getCheckout(hash: CommitHash): Promise<StorageCheckout<undefined> | null> {
-    const commit = this.commits.get(hash.toHex())
-    if (commit === undefined) return Promise.resolve(null)
-    const blobHex = commit.blob
-    const data = this.commitData.get(blobHex)
-    if (data === undefined) return Promise.resolve(null)
-    return Promise.resolve({ commit, data })
   }
 
   setBookmark(bookmark: Bookmark): Promise<void> {
@@ -72,9 +63,6 @@ describe('Versie', () => {
 
     const allBookmarks = await storage.getAllBookmarks()
     expect(allBookmarks).toHaveLength(1)
-
-    const checkoutResult = await storage.getCheckout(commit.hash)
-    expect(checkoutResult).not.toBeNull()
   })
 
   test('all commits are stored when multiple commits are made', async () => {

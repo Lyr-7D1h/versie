@@ -137,27 +137,22 @@ export class Deltizer {
     return value
   }
 
-  async reconstructWithoutDecompress(hash: BlobHash) {
-    const data = await this.cachedLookup(hash)
-    if (data === null) return null
-    const type = data[0]
-    if (type === 0x00) {
-      return data.subarray(1)
-    } else if (type === 0x01) {
-      return this.reconstructFromDelta(data)
-    }
-    throw new DeltizingError(`Unknown data type: ${type}`)
-  }
   /**
    * Returns null if `hash` could not be found.
    * Throws a `DeltizingError` if the stored blob data has an unknown type or if a delta cannot be reconstructed because its base blob is missing.
    */
   async reconstruct(hash: BlobHash): Promise<string | null> {
-    const res = await this.reconstructWithoutDecompress(hash)
-    if (res === null) return null
-    if (typeof res === 'string') return res
-    const decompressed = await Deltizer.decompressBytes(res)
-    return new TextDecoder().decode(decompressed)
+    const data = await this.cachedLookup(hash)
+    if (data === null) return null
+    const type = data[0]
+    if (type === 0x00) {
+      const decompressed = await Deltizer.decompressBytes(data.subarray(1))
+      return new TextDecoder().decode(decompressed)
+    } else if (type === 0x01) {
+      return this.reconstructFromDelta(data)
+    }
+
+    throw new DeltizingError(`Unknown data type: ${type}`)
   }
 
   /** Recursive function to resolve delta */

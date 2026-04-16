@@ -13,12 +13,6 @@ export type JsonValue =
   | JsonPrimitive
   | (JsonValue | null)[]
   | { [key: string]: JsonValue | null }
-export type StorageCheckout<
-  TMeta extends JsonValue | undefined = JsonValue | undefined,
-> = {
-  commit: CommitJson<TMeta>
-  data: string
-}
 
 /** Generic storage interface for fetching and storing vcs objects */
 export interface Storage<M extends MetaData = undefined> {
@@ -26,8 +20,6 @@ export interface Storage<M extends MetaData = undefined> {
   getCommit(hash: CommitHash): Promise<CommitJson<MetaJsonOf<M>> | null>
   /** Return the full commit data */
   getCommitData(hash: BlobHash): Promise<string | null>
-  /** Performance improved to get commit and commit data at same time */
-  getCheckout(hash: CommitHash): Promise<StorageCheckout<MetaJsonOf<M>> | null>
 
   /**
    * Store a commit with its corresponding data, where `commit.blob` is always the hash of `data`

@@ -152,6 +152,10 @@ export class Versie<M extends MetaData> {
     return this.storage.getCommit(hash)
   }
 
+  getCommitData(blob: BlobHash) {
+    return this.storage.getCommitData(blob)
+  }
+
   /**
    * Get all commits from storage
    */
@@ -223,7 +227,7 @@ export class Versie<M extends MetaData> {
     return Result.fromAsync(async () => {
       // if commit is head just get commit data
       if (this._head && hash.compare(this._head.hash)) {
-        const blobResult = await this.storage.getCommitData(this._head.blob)
+        const blobResult = await this.getCommitData(this._head.blob)
         if (!blobResult.ok) return blobResult
         const data = blobResult.value
         if (data === null)
@@ -231,14 +235,19 @@ export class Versie<M extends MetaData> {
         return Result.ok({ commit: this._head, data })
       }
 
-      const checkoutResult = await this.storage.getCheckout(hash)
-      if (!checkoutResult.ok) return checkoutResult
-      const checkout = checkoutResult.value
-      if (checkout === null) return Result.error(new CommitNotFoundError(hash))
+      const commitResult = await this.getCommit(hash)
+      if (!commitResult.ok) return commitResult
+      const commit = commitResult.value
+      if (commit === null) return Result.error(new CommitNotFoundError(hash))
 
-      this._head = checkout.commit
+      const blobResult = await this.getCommitData(commit.blob)
+      if (!blobResult.ok) return blobResult
+      const data = blobResult.value
+      if (data === null) return Result.error(new BlobNotFoundError(commit.blob))
 
-      return Result.ok(checkout)
+      this._head = commit
+
+      return Result.ok({ commit, data })
     })
   }
 }
