@@ -23,6 +23,15 @@ function unknownErrorMessage(error: unknown): string {
   return String(error)
 }
 
+function isConstraintError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: string }).name === 'ConstraintError'
+  )
+}
+
 class IndexDBStorageCreateBaseError extends Error {
   constructor(message: string) {
     super(message)
@@ -244,22 +253,36 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       trans.oncomplete = () => {
         resolve()
       }
-      trans.onerror = () => {
+      trans.onerror = (event) => {
+        if (isConstraintError(trans.error)) {
+          event.preventDefault()
+          resolve()
+          return
+        }
         reject(new Error(`failed to set commit: ${trans.error?.message ?? ''}`))
       }
 
       const commitsStore = trans.objectStore(COMMITS_STORE)
-      const commitReq = commitsStore.put(commit.toJson(), commit.hash)
-      commitReq.onerror = () => {
+      // use add to prevent overwrite existing commits and blob
+      const commitReq = commitsStore.add(commit.toJson(), commit.hash)
+      commitReq.onerror = (event) => {
+        if (isConstraintError(commitReq.error)) {
+          event.preventDefault()
+          return
+        }
         reject(
-          new Error(`failed to set commit: ${commitReq.error?.message ?? ''}`),
+          new Error(`failed to add commit: ${commitReq.error?.message ?? ''}`),
         )
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.put(bytes, commit.blob)
-      blobReq.onerror = () => {
-        reject(new Error(`failed to set blob: ${blobReq.error?.message ?? ''}`))
+      const blobReq = blobsStore.add(bytes, commit.blob)
+      blobReq.onerror = (event) => {
+        if (isConstraintError(blobReq.error)) {
+          event.preventDefault()
+          return
+        }
+        reject(new Error(`failed to add blob: ${blobReq.error?.message ?? ''}`))
       }
     })
   }
@@ -275,6 +298,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const store = trans.objectStore(storeName)
+      // TODO(perf): Use add() to prevent overwriting existing data
       const req = store.put(value, id)
       req.onsuccess = () => {
         resolve()
