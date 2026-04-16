@@ -10,6 +10,7 @@ import { Storage } from './Storage'
 import { AsyncResult, Result } from 'typescript-result'
 import {
   ParseError,
+  ParseMetadata,
   StorageError,
   VersieStorage,
   VersieStorageError,
@@ -49,7 +50,7 @@ export class BlobNotFoundError extends VersieError {
 export class Versie<M extends MetaData> {
   static async create<M extends MetaData>(
     storage: Storage<M>,
-    parseMetadata: (raw: unknown) => M,
+    parseMetadata: ParseMetadata<M>,
   ) {
     const vcsStorage = new VersieStorage(storage, parseMetadata)
     const bookmarks = await Bookmarks.create(vcsStorage)

@@ -8,6 +8,7 @@ import {
   MetaData,
   commitSchema,
   CommitJson,
+  MetaJsonOf,
 } from './Commit'
 import { Storage } from './Storage'
 import { DeltizingError } from './Deltizer'
@@ -38,11 +39,16 @@ export class ParseError extends Error {
 
 export type VersieStorageError = StorageError | DeltizingError
 
+/**
+ * Parses serialized metadata into its strongly typed in-memory representation.
+ */
+export type ParseMetadata<M extends MetaData> = (metadata: MetaJsonOf<M>) => M
+
 /** VCS Storage wrapper for parsing and error handling of storage data */
 export class VersieStorage<M extends MetaData> {
   constructor(
     private readonly storage: Storage<M>,
-    private readonly parseMetadata: (raw: unknown) => M,
+    private readonly parseMetadata: ParseMetadata<M>,
   ) {}
 
   private toStorageError(error: unknown): VersieStorageError {
@@ -85,7 +91,9 @@ export class VersieStorage<M extends MetaData> {
 
         const commit = commitSchema.safeParse(checkout.commit)
         if (!commit.success) return Result.error(new ParseError(commit.error))
-        const metadata = this.parseMetadata(commit.data.metadata)
+        const metadata = this.parseMetadata(
+          commit.data.metadata as MetaJsonOf<M>,
+        )
 
         return Result.ok({
           commit: new Commit(
@@ -119,7 +127,7 @@ export class VersieStorage<M extends MetaData> {
       const parsed = commitSchema.safeParse(raw)
       if (!parsed.success) return Result.error(new ParseError(parsed.error))
 
-      const metadata = this.parseMetadata(parsed.data.metadata)
+      const metadata = this.parseMetadata(parsed.data.metadata as MetaJsonOf<M>)
 
       return Result.ok(
         new Commit(
@@ -193,7 +201,9 @@ export class VersieStorage<M extends MetaData> {
         const parsed = commitSchema.safeParse(raw)
         if (!parsed.success) return Result.error(new ParseError(parsed.error))
 
-        const metadata = this.parseMetadata(parsed.data.metadata)
+        const metadata = this.parseMetadata(
+          parsed.data.metadata as MetaJsonOf<M>,
+        )
 
         commits.push(
           await Commit.create(

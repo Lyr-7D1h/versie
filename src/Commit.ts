@@ -64,6 +64,31 @@ export class Commit<M extends MetaData = undefined> {
     readonly parent?: CommitHash,
   ) {}
 
+  /** Convert data to a hash */
+  static async hash(
+    blob: BlobHash,
+    /** Epoch integer `Date.getTime()` */
+    createdOn: number,
+    metadata: MetaJsonOf<MetaData>,
+    /** Hash of parent commit, null if it is a root commit */
+    parent?: CommitHash,
+  ): Promise<CommitHash> {
+    const metaBytes =
+      typeof metadata !== 'undefined'
+        ? new TextEncoder().encode(JSON.stringify(metadata))
+        : new Uint8Array(0)
+    // blob(32) + timestamp(8) + parent(32, optional) + metadata
+    const buf = new ArrayBuffer(
+      32 + 8 + (parent ? 32 : 0) + metaBytes.byteLength,
+    )
+    const view = new DataView(buf)
+    new Uint8Array(buf).set(blob, 0)
+    view.setFloat64(32, createdOn)
+    if (parent) new Uint8Array(buf).set(parent, 40)
+    new Uint8Array(buf).set(metaBytes, 32 + 8 + (parent ? 32 : 0))
+    return (await Sha256Hash.fromBytes(new Uint8Array(buf))) as CommitHash
+  }
+
   /**
    * Creates a new Commit
    */
@@ -75,10 +100,12 @@ export class Commit<M extends MetaData = undefined> {
     /** Hash of parent commit, null if it is a root commit */
     parent?: CommitHash,
   ): Promise<Commit<M>> {
-    const hash = (await Sha256Hash.fromString(
-      `${blob.toBase64()}${createdOn.getTime()}${parent?.toBase64() ?? ''}${typeof metadata !== 'undefined' ? JSON.stringify(metadata.toJson()) : ''}`,
-    )) as CommitHash
-
+    const hash = await Commit.hash(
+      blob,
+      createdOn.getTime(),
+      metadata?.toJson(),
+      parent,
+    )
     return new Commit(hash, blob, createdOn, metadata, parent)
   }
 
