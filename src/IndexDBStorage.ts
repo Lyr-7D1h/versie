@@ -27,15 +27,6 @@ function unknownErrorMessage(error: unknown): string {
   return String(error)
 }
 
-function isConstraintError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'name' in error &&
-    (error as { name?: string }).name === 'ConstraintError'
-  )
-}
-
 class IndexDBStorageCreateBaseError extends Error {
   constructor(message: string) {
     super(message)
@@ -253,35 +244,33 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         resolve()
       }
       trans.onerror = (event) => {
-        if (isConstraintError(trans.error)) {
-          event.preventDefault()
-          resolve()
-          return
-        }
-        reject(new Error(`failed to set commit: ${trans.error?.message ?? ''}`))
+        const err =
+          trans.error ?? (event.target as IDBRequest | undefined)?.error
+        reject(
+          new Error(
+            `Failed to create commit transaction: ${err?.message ?? 'unknown error'}`,
+          ),
+        )
       }
 
       const commitsStore = trans.objectStore(COMMITS_STORE)
-      // use add to prevent overwrite existing commits and blob
-      const commitReq = commitsStore.add(commit.toJson(), commit.hash)
+      const commitReq = commitsStore.put(commit.toJson(), commit.hash)
       commitReq.onerror = (event) => {
-        if (isConstraintError(commitReq.error)) {
-          event.preventDefault()
-          return
-        }
+        const err =
+          trans.error ?? (event.target as IDBRequest | undefined)?.error
         reject(
-          new Error(`failed to add commit: ${commitReq.error?.message ?? ''}`),
+          new Error(`Failed to add commit: ${err?.message ?? 'unknown error'}`),
         )
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.add(bytes, commit.blob)
+      const blobReq = blobsStore.put(bytes, commit.blob)
       blobReq.onerror = (event) => {
-        if (isConstraintError(blobReq.error)) {
-          event.preventDefault()
-          return
-        }
-        reject(new Error(`failed to add blob: ${blobReq.error?.message ?? ''}`))
+        const err =
+          trans.error ?? (event.target as IDBRequest | undefined)?.error
+        reject(
+          new Error(`Failed to add blob: ${err?.message ?? 'unknown error'}`),
+        )
       }
     })
   }
@@ -315,7 +304,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const store = trans.objectStore(storeName)
-      // TODO(perf): Use add() to prevent overwriting existing data
+      // TODO(perf): Use add() to prevent overwriting existing data and doing a write operation, needs to catch the error constraint however which can proof to be tricky for different browser environment
       const req = store.put(value, id)
       req.onsuccess = () => {
         resolve()
