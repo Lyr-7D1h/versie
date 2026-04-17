@@ -254,8 +254,13 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const commitsStore = trans.objectStore(COMMITS_STORE)
-      const commitReq = commitsStore.put(commit.toJson(), commit.hash)
+      const commitReq = commitsStore.add(commit.toJson(), commit.hash)
       commitReq.onerror = (event) => {
+        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
+        if (commitReq.error?.name === 'ConstraintError') {
+          event.preventDefault()
+          return
+        }
         const err =
           trans.error ?? (event.target as IDBRequest | undefined)?.error
         reject(
@@ -264,8 +269,13 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const blobsStore = trans.objectStore(BLOB_STORE)
-      const blobReq = blobsStore.put(bytes, commit.blob)
+      const blobReq = blobsStore.add(bytes, commit.blob)
       blobReq.onerror = (event) => {
+        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
+        if (blobReq.error?.name === 'ConstraintError') {
+          event.preventDefault()
+          return
+        }
         const err =
           trans.error ?? (event.target as IDBRequest | undefined)?.error
         reject(
@@ -304,12 +314,17 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
 
       const store = trans.objectStore(storeName)
-      // TODO(perf): Use add() to prevent overwriting existing data and doing a write operation, needs to catch the error constraint however which can proof to be tricky for different browser environment
-      const req = store.put(value, id)
+      const req = store.add(value, id)
       req.onsuccess = () => {
         resolve()
       }
-      req.onerror = (_e) => {
+      req.onerror = (e) => {
+        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
+        if (req.error?.name === 'ConstraintError') {
+          e.preventDefault()
+          resolve()
+          return
+        }
         reject(new Error(`failed to set item: ${req.error?.message ?? ''}`))
       }
     })
