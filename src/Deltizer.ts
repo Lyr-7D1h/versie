@@ -139,27 +139,48 @@ export class Deltizer {
 
   /**
    * Returns null if `hash` could not be found.
-   * Throws a `DeltizingError` if the stored blob data has an unknown type or if a delta cannot be reconstructed because its base blob is missing.
+   * Throws a `DeltizingError` if the stored blob data has an unknown type, if a delta cannot be reconstructed because its base blob is missing,
+   * or if a cyclic delta chain is detected.
    */
   async reconstruct(hash: BlobHash): Promise<string | null> {
-    const data = await this.cachedLookup(hash)
-    if (data === null) return null
-    const type = data[0]
-    if (type === 0x00) {
-      const decompressed = await Deltizer.decompressBytes(data.subarray(1))
-      return new TextDecoder().decode(decompressed)
-    } else if (type === 0x01) {
-      return this.reconstructFromDelta(data)
-    }
+    return this.reconstructWithVisited(hash, new Set())
+  }
 
-    throw new DeltizingError(`Unknown data type: ${type}`)
+  private async reconstructWithVisited(
+    hash: BlobHash,
+    visited: Set<string>,
+  ): Promise<string | null> {
+    const key = hash.toBase64()
+    if (visited.has(key)) {
+      throw new DeltizingError('Detected delta cycle at hash ' + hash.toHex())
+    }
+    visited.add(key)
+
+    try {
+      const data = await this.cachedLookup(hash)
+      if (data === null) return null
+      const type = data[0]
+      if (type === 0x00) {
+        const decompressed = await Deltizer.decompressBytes(data.subarray(1))
+        return new TextDecoder().decode(decompressed)
+      } else if (type === 0x01) {
+        return await this.reconstructFromDelta(data, visited)
+      }
+
+      throw new DeltizingError(`Unknown data type: ${type}`)
+    } finally {
+      visited.delete(key)
+    }
   }
 
   /** Recursive function to resolve delta */
-  private async reconstructFromDelta(blob: Uint8Array): Promise<string | null> {
+  private async reconstructFromDelta(
+    blob: Uint8Array,
+    visited: Set<string>,
+  ): Promise<string | null> {
     const delta = await Deltizer.decompressBytes(blob.subarray(1))
     const { base: baseHash, ops } = dedeltize(delta)
-    const base = await this.reconstruct(baseHash)
+    const base = await this.reconstructWithVisited(baseHash, visited)
     if (base === null)
       throw new DeltizingError(
         'Failed to construct base from hash ' + baseHash.toHex(),
@@ -186,6 +207,21 @@ export class Deltizer {
    * throws an error if it could not be found
    * */
   async getDeltaCount(baseHash: BlobHash): Promise<number> {
+    return this.getDeltaCountWithVisited(baseHash, new Set())
+  }
+
+  private async getDeltaCountWithVisited(
+    baseHash: BlobHash,
+    visited: Set<string>,
+  ): Promise<number> {
+    const key = baseHash.toBase64()
+    if (visited.has(key)) {
+      throw new DeltizingError(
+        'Detected delta cycle while counting at hash ' + baseHash.toHex(),
+      )
+    }
+    visited.add(key)
+
     const cached = this.cache.getDeltaChainCount(baseHash)
     if (cached != null) {
       return cached
@@ -210,7 +246,7 @@ export class Deltizer {
     // get count from base and add 1
     const base = Sha256Hash.create(delta.slice(0, 32)) as BlobHash
     // chain count is previous + 1
-    const baseCount = await this.getDeltaCount(base)
+    const baseCount = await this.getDeltaCountWithVisited(base, visited)
     const count = baseCount + 1
     this.cache.setDeltaChainCount(baseHash, count)
     return count

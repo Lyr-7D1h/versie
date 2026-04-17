@@ -21,6 +21,17 @@ describe('Deltizer', () => {
     blobStore.set(hash.toBase64(), data.data)
   }
 
+  /** Build a delta payload that only points to a base hash (no ops), useful for cycle tests */
+  const makeBaseOnlyDelta = async (base: BlobHash): Promise<Uint8Array> => {
+    const delta = new Uint8Array(32)
+    delta.set(base, 0)
+    const compressed = await Deltizer.compressBytes(delta)
+    const out = new Uint8Array(1 + compressed.length)
+    out[0] = 0x01
+    out.set(compressed, 1)
+    return out
+  }
+
   beforeEach(() => {
     blobStore = new Map()
     deltizer = new Deltizer((hash) => {
@@ -283,6 +294,16 @@ describe('Deltizer', () => {
       blobStore.set(hash.toBase64(), new Uint8Array([0xff]))
       await expect(deltizer.reconstruct(hash)).rejects.toThrow(DeltizingError)
     })
+
+    test('throws DeltizingError when a cyclic delta chain is encountered', async () => {
+      const h1 = await createHash('rec-cycle-1')
+      const h2 = await createHash('rec-cycle-2')
+
+      blobStore.set(h1.toBase64(), await makeBaseOnlyDelta(h2))
+      blobStore.set(h2.toBase64(), await makeBaseOnlyDelta(h1))
+
+      await expect(deltizer.reconstruct(h1)).rejects.toThrow(DeltizingError)
+    })
   })
 
   describe('getDeltaCount', () => {
@@ -347,6 +368,16 @@ describe('Deltizer', () => {
       const hash = await createHash('gdc-unknown-type')
       blobStore.set(hash.toBase64(), new Uint8Array([0x02, 0x00, 0x00, 0x00]))
       await expect(deltizer.getDeltaCount(hash)).rejects.toThrow(DeltizingError)
+    })
+
+    test('throws DeltizingError for cyclic delta references', async () => {
+      const h1 = await createHash('gdc-cycle-1')
+      const h2 = await createHash('gdc-cycle-2')
+
+      blobStore.set(h1.toBase64(), await makeBaseOnlyDelta(h2))
+      blobStore.set(h2.toBase64(), await makeBaseOnlyDelta(h1))
+
+      await expect(deltizer.getDeltaCount(h1)).rejects.toThrow(DeltizingError)
     })
   })
 
