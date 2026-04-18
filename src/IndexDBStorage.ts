@@ -10,7 +10,7 @@ import {
 } from './Commit'
 import { Bookmark, BookmarkJson } from './Bookmark'
 import { Sha256Hash } from './Sha256Hash'
-import { BlobCache, Deltizer } from './Deltizer'
+import { BlobCache, DeltizedBlob, Deltizer } from './Deltizer'
 
 export const COMMITS_STORE = 'commits'
 export const BLOB_STORE = 'blobs'
@@ -63,7 +63,7 @@ export type IndexDBStorageOptions<M extends MetaData> = {
   lookupDeltaBlob?: (
     indexdb: IndexDBStorage<M>,
     hash: BlobHash,
-  ) => Promise<Uint8Array | null>
+  ) => Promise<DeltizedBlob | null>
   /** Optional delta chain cap forwarded to Deltizer */
   maxDeltaChainCount?: number
   /** Optional cache implementation forwarded to Deltizer */
@@ -357,7 +357,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   async get(
     storeName: typeof BLOB_STORE,
     hash: BlobHash,
-  ): Promise<Uint8Array | null>
+  ): Promise<DeltizedBlob | null>
   /** Get commit json */
   async get(
     storeName: typeof COMMITS_STORE,

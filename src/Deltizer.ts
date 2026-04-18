@@ -3,8 +3,14 @@ import diff from 'fast-diff'
 import { BlobHash } from './Commit'
 import { Sha256Hash } from './Sha256Hash'
 import { VersieError } from './VersieError'
+import { Tagged } from './Tagged'
 
 const COMPRESSION_FORMAT = 'deflate'
+
+/** Non compressed binary delta formatted bytes */
+export type DeltaBlob = Tagged<Uint8Array, 'delta-raw'>
+/** Compressed bytes prefixed with what type of blob it is (0x0: Regular compressed blob, 0x1: Compressed binary delta format) */
+export type DeltizedBlob = Tagged<Uint8Array, 'delta'>
 
 /** An error that happened when trying to turn commit data in deltas */
 export class DeltizingError extends VersieError {
@@ -12,44 +18,62 @@ export class DeltizingError extends VersieError {
 }
 
 /** Lookup operation for fetching deltizer compressed data */
-type LookupBlob = (hash: BlobHash) => Promise<Uint8Array | null>
+type LookupBlob = (hash: BlobHash) => Promise<DeltizedBlob | null>
 export interface BlobCache {
-  getBlob(hash: BlobHash): Uint8Array | null
-  setBlob(hash: BlobHash, value: Uint8Array): void
+  getBlob(hash: BlobHash): DeltizedBlob | null
+  setBlob(hash: BlobHash, value: DeltizedBlob): void
   getDeltaChainCount(hash: BlobHash): number | undefined
   setDeltaChainCount(hash: BlobHash, count: number): void
 }
 
-type BlobCacheEntry = { blob?: Uint8Array; deltaChainCount?: number }
+export type BlobCacheEntry = {
+  blob?: DeltizedBlob
+  deltaChainCount?: number
+}
 
 /** In memory cache for blobs and delta chain counts */
 export class LRUBlobCache implements BlobCache {
-  private readonly cache: LRUCache<Uint8Array, BlobCacheEntry>
+  readonly cache: LRUCache<string, BlobCacheEntry>
 
-  constructor(max = 200, maxSize = 50 * 1024 * 1024) {
+  constructor(
+    opts: Partial<LRUCache.Options<string, BlobCacheEntry, unknown>> = {},
+  ) {
     this.cache = new LRUCache({
-      max,
-      maxSize,
+      ...opts,
+      max: opts.max ?? 200,
+      maxSize: opts.maxSize ?? 50 * 1024 * 1024,
       sizeCalculation: (entry) => (entry.blob?.length ?? 0) + 8,
     })
   }
 
-  getBlob(hash: BlobHash): Uint8Array | null {
-    return this.cache.get(hash)?.blob ?? null
+  private key(hash: BlobHash): string {
+    return hash.toBase64()
   }
 
-  setBlob(hash: BlobHash, value: Uint8Array): void {
-    const entry = this.cache.peek(hash) ?? {}
-    this.cache.set(hash, { ...entry, blob: value })
+  setEntry(hash: BlobHash, value: Partial<BlobCacheEntry>): void {
+    const key = this.key(hash)
+    const entry = this.cache.peek(key) ?? {}
+    this.cache.set(key, { ...entry, ...value })
+  }
+
+  getBlob(hash: BlobHash): DeltizedBlob | null {
+    return this.cache.get(this.key(hash))?.blob ?? null
+  }
+
+  setBlob(hash: BlobHash, value: DeltizedBlob): void {
+    this.setEntry(hash, { blob: value })
   }
 
   getDeltaChainCount(hash: BlobHash): number | undefined {
-    return this.cache.get(hash)?.deltaChainCount
+    return this.cache.get(this.key(hash))?.deltaChainCount
   }
 
   setDeltaChainCount(hash: BlobHash, count: number): void {
-    const entry = this.cache.peek(hash) ?? {}
-    this.cache.set(hash, { ...entry, deltaChainCount: count })
+    this.setEntry(hash, { deltaChainCount: count })
+  }
+
+  clear() {
+    this.cache.clear()
   }
 }
 
@@ -57,7 +81,7 @@ export enum BlobType {
   Blob,
   Delta,
 }
-// TODO: Run in web worker, diffing algorithm can be expensive
+// TODO: Add feature to run in web worker, diffing algorithm can be expensive
 /**
  * Handle how blobs are stored by weighing if it should be turned into a delta and compressing string values
  *
@@ -105,8 +129,8 @@ export class Deltizer {
     return new Uint8Array(decompressed)
   }
 
-  static blobType(hash: Uint8Array) {
-    switch (hash[0]) {
+  static blobType(data: Uint8Array) {
+    switch (data[0]) {
       case 0x00:
         return BlobType.Blob
       case 0x01:
@@ -119,20 +143,22 @@ export class Deltizer {
   constructor(
     /** The lookup operation for commit data */
     readonly lookup: LookupBlob,
+    // TODO: add more options for weighting lookup against blob size
     /**
      * Cap of the number of deltas that may be chained for a blob. Once the cap is reached, the blob is stored as a full blob instead of another delta.
      *
      * Constructing a delta chain requires reading and applying each delta in sequence. So lookup costs grow with chain depth. */
     private readonly maxDeltaChainCount: number = 50,
-    /** Combined cache for raw blob data and delta chain counts */
+    /** Cache, deltizer is responsible for optimizing delta cache usage based on reconstructing and constructing behavior */
     readonly cache: BlobCache = new LRUBlobCache(),
   ) {}
 
   /** Use the given `lookup()` with the cache infront */
-  async cachedLookup(hash: BlobHash): Promise<Uint8Array | null> {
+  async cachedLookup(hash: BlobHash): Promise<DeltizedBlob | null> {
     const cached = this.cache.getBlob(hash)
     if (cached != null) return cached
     const value = await this.lookup(hash)
+    // only store deltized blobs
     if (value != null) this.cache.setBlob(hash, value)
     return value
   }
@@ -175,11 +201,11 @@ export class Deltizer {
 
   /** Recursive function to resolve delta */
   private async reconstructFromDelta(
-    blob: Uint8Array,
+    blob: DeltizedBlob,
     visited: Set<string>,
   ): Promise<string | null> {
     const delta = await Deltizer.decompressBytes(blob.subarray(1))
-    const { base: baseHash, ops } = dedeltize(delta)
+    const { base: baseHash, ops } = Deltizer.dedeltize(delta)
     const base = await this.reconstructWithVisited(baseHash, visited)
     if (base === null)
       throw new DeltizingError(
@@ -234,12 +260,15 @@ export class Deltizer {
       )
 
     const type = raw[0]
-    if (type === 0x00) {
-      this.cache.setDeltaChainCount(baseHash, 0)
-      return 0
-    }
-    if (type !== 0x01) {
-      throw new DeltizingError(`Unknown data type: ${type}`)
+    switch (type) {
+      case 0x00: {
+        this.cache.setDeltaChainCount(baseHash, 0)
+        return 0
+      }
+      case 0x01:
+        break
+      default:
+        throw new DeltizingError(`Unknown data type: ${type}`)
     }
     const delta = await Deltizer.decompressBytes(raw.subarray(1))
 
@@ -257,29 +286,46 @@ export class Deltizer {
     value: string,
     base?: BlobHash,
   ): Promise<{
-    data: Uint8Array
+    data: DeltizedBlob
     /** The delta chain count of the base, how many deltas the base is dependent on including itself. So `0` if Blob and `1` if delta on a single blob, `>1` if more in between */
     deltaChainCount: number
   }> {
     if (base) {
       const res = await this.shouldStoreAsDelta(value, base)
       if (res !== false) {
-        const delta = deltize(base, res.baseValue, value)
-        const compressedDelta = await Deltizer.compressBytes(delta)
-        const deltaBytes = new Uint8Array(1 + compressedDelta.length)
-        deltaBytes[0] = 0x01
-        deltaBytes.set(compressedDelta, 1)
-        return { data: deltaBytes, deltaChainCount: res.count }
+        const delta = Deltizer.deltize(base, res.baseValue, value)
+        return {
+          data: await Deltizer.deltaBlobToDeltizedBlob(delta),
+          deltaChainCount: res.count,
+        }
       }
     }
 
+    return {
+      data: await Deltizer.stringToDeltizedBlob(value),
+      deltaChainCount: 0,
+    }
+  }
+
+  static async deltaBlobToDeltizedBlob(
+    delta: DeltaBlob,
+  ): Promise<DeltizedBlob> {
+    const compressedDelta = await Deltizer.compressBytes(delta)
+    const deltaBytes = new Uint8Array(1 + compressedDelta.length)
+    deltaBytes[0] = 0x01
+    deltaBytes.set(compressedDelta, 1)
+    return deltaBytes as DeltizedBlob
+  }
+
+  /** Encode some string to a prefixed compressed blob (0x0) */
+  static async stringToDeltizedBlob(value: string) {
     const encoder = new TextEncoder()
     const blob = encoder.encode(value)
     const compressedBlob = await Deltizer.compressBytes(blob)
     const blobBytes = new Uint8Array(1 + compressedBlob.length)
     blobBytes[0] = 0x00
     blobBytes.set(compressedBlob, 1)
-    return { data: blobBytes, deltaChainCount: 0 }
+    return blobBytes as DeltizedBlob
   }
 
   /**
@@ -327,6 +373,117 @@ export class Deltizer {
     }
 
     return { baseValue, count }
+  }
+
+  /** Deltize a value onto `base`. Returning a binary format with `baseHash:deltaOps[]` */
+  static deltize(baseHash: BlobHash, base: string, value: string): DeltaBlob {
+    const ops: RawDeltaOp[] = []
+
+    // Use fast-diff to compute the differences
+    // diff returns: [op, text] where op is -1 (delete), 0 (equal), 1 (insert)
+    const diffs = diff(base, value)
+
+    let charOffset = 0
+
+    for (const [op, text] of diffs) {
+      switch (op) {
+        case -1: {
+          // Delete - skip these characters in the base
+          charOffset += text.length
+          break
+        }
+        case 0: {
+          // Equal - this is a copy operation
+          ops.push({
+            type: DeltaType.Copy,
+            offset: charOffset,
+            length: text.length,
+          })
+          charOffset += text.length
+          break
+        }
+        case 1: {
+          // Insert - add new content (op === 1)
+          ops.push({
+            type: DeltaType.Insert,
+            data: new TextEncoder().encode(text),
+          })
+          break
+        }
+      }
+    }
+
+    // Calculate total size needed
+    let bufferByteSize = 32 // base hash 256/8 bytes
+    for (const op of ops) {
+      if (op.type === DeltaType.Copy) {
+        bufferByteSize += 1 + 4 + 4 // type + offset + length
+      } else {
+        bufferByteSize += 1 + 4 + op.data.length // type + length + data
+      }
+    }
+
+    // Encode into binary format
+    const buffer = new Uint8Array(bufferByteSize)
+    const view = new DataView(buffer.buffer)
+    let offset = 0
+
+    // Write base hash (BlobHash is a Sha256Hash which has a .hash property)
+    buffer.set(baseHash, offset)
+    offset += 32
+
+    // Write operations
+    for (const op of ops) {
+      if (op.type === DeltaType.Copy) {
+        buffer[offset++] = DeltaType.Copy
+        view.setUint32(offset, op.offset, true) // little-endian
+        offset += 4
+        view.setUint32(offset, op.length, true)
+        offset += 4
+      } else {
+        buffer[offset++] = DeltaType.Insert
+        const data = op.data
+        view.setUint32(offset, data.length, true)
+        offset += 4
+        buffer.set(data, offset)
+        offset += data.length
+      }
+    }
+
+    return buffer as DeltaBlob
+  }
+
+  /** Convert a delta binary format into a base hash + delta operations */
+  static dedeltize(data: Uint8Array): Delta {
+    const base = Sha256Hash.create(data.slice(0, 32)) as BlobHash
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+
+    const ops: DeltaOperation[] = []
+    let offset = 32
+    while (offset < data.length) {
+      const type = data[offset++]
+      if (type === DeltaType.Copy) {
+        const copyOffset = view.getUint32(offset, true)
+        offset += 4
+        const length = view.getUint32(offset, true)
+        offset += 4
+
+        ops.push({ type, offset: copyOffset, length })
+      } else if (type === DeltaType.Insert) {
+        const length = view.getUint32(offset, true)
+        offset += 4
+        const textData = data.subarray(offset, offset + length)
+        const text = new TextDecoder().decode(textData)
+        offset += length
+
+        ops.push({ type, data: text })
+      }
+    }
+
+    return {
+      base,
+      ops,
+    }
   }
 }
 
@@ -383,83 +540,6 @@ type RawDeltaOp =
   | { type: DeltaType.Copy; offset: number; length: number }
   | { type: DeltaType.Insert; data: Uint8Array }
 
-function deltize(baseHash: BlobHash, base: string, value: string): Uint8Array {
-  const ops: RawDeltaOp[] = []
-
-  // Use fast-diff to compute the differences
-  // diff returns: [op, text] where op is -1 (delete), 0 (equal), 1 (insert)
-  const diffs = diff(base, value)
-
-  let charOffset = 0
-
-  for (const [op, text] of diffs) {
-    switch (op) {
-      case -1: {
-        // Delete - skip these characters in the base
-        charOffset += text.length
-        break
-      }
-      case 0: {
-        // Equal - this is a copy operation
-        ops.push({
-          type: DeltaType.Copy,
-          offset: charOffset,
-          length: text.length,
-        })
-        charOffset += text.length
-        break
-      }
-      case 1: {
-        // Insert - add new content (op === 1)
-        ops.push({
-          type: DeltaType.Insert,
-          data: new TextEncoder().encode(text),
-        })
-        break
-      }
-    }
-  }
-
-  // Calculate total size needed
-  let bufferByteSize = 32 // base hash 256/8 bytes
-  for (const op of ops) {
-    if (op.type === DeltaType.Copy) {
-      bufferByteSize += 1 + 4 + 4 // type + offset + length
-    } else {
-      bufferByteSize += 1 + 4 + op.data.length // type + length + data
-    }
-  }
-
-  // Encode into binary format
-  const buffer = new Uint8Array(bufferByteSize)
-  const view = new DataView(buffer.buffer)
-  let offset = 0
-
-  // Write base hash (BlobHash is a Sha256Hash which has a .hash property)
-  buffer.set(baseHash, offset)
-  offset += 32
-
-  // Write operations
-  for (const op of ops) {
-    if (op.type === DeltaType.Copy) {
-      buffer[offset++] = DeltaType.Copy
-      view.setUint32(offset, op.offset, true) // little-endian
-      offset += 4
-      view.setUint32(offset, op.length, true)
-      offset += 4
-    } else {
-      buffer[offset++] = DeltaType.Insert
-      const data = op.data
-      view.setUint32(offset, data.length, true)
-      offset += 4
-      buffer.set(data, offset)
-      offset += data.length
-    }
-  }
-
-  return buffer
-}
-
 type Delta = {
   base: BlobHash
   ops: DeltaOperation[]
@@ -477,36 +557,4 @@ type DeltaOperation =
 enum DeltaType {
   Copy = 0,
   Insert = 1,
-}
-/** Convert a base with a delta to the full original blob */
-function dedeltize(data: Uint8Array): Delta {
-  const base = Sha256Hash.create(data.slice(0, 32)) as BlobHash
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-
-  const ops: DeltaOperation[] = []
-  let offset = 32
-  while (offset < data.length) {
-    const type = data[offset++]
-    if (type === DeltaType.Copy) {
-      const copyOffset = view.getUint32(offset, true)
-      offset += 4
-      const length = view.getUint32(offset, true)
-      offset += 4
-
-      ops.push({ type, offset: copyOffset, length })
-    } else if (type === DeltaType.Insert) {
-      const length = view.getUint32(offset, true)
-      offset += 4
-      const textData = data.subarray(offset, offset + length)
-      const text = new TextDecoder().decode(textData)
-      offset += length
-
-      ops.push({ type, data: text })
-    }
-  }
-
-  return {
-    base,
-    ops,
-  }
 }

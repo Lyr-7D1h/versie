@@ -1,10 +1,19 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import { Deltizer, DeltizingError, LRUBlobCache } from './Deltizer'
+import {
+  Deltizer,
+  DeltizedBlob,
+  DeltizingError,
+  LRUBlobCache,
+} from './Deltizer'
 import { Sha256Hash } from './Sha256Hash'
 import { BlobHash } from './Commit'
 
+const asDeltizedBlob = (value: Uint8Array): DeltizedBlob => {
+  return value as DeltizedBlob
+}
+
 describe('Deltizer', () => {
-  let blobStore: Map<string, Uint8Array>
+  let blobStore: Map<string, DeltizedBlob>
   let deltizer: Deltizer
 
   const createHash = async (str: string): Promise<BlobHash> => {
@@ -22,14 +31,14 @@ describe('Deltizer', () => {
   }
 
   /** Build a delta payload that only points to a base hash (no ops), useful for cycle tests */
-  const makeBaseOnlyDelta = async (base: BlobHash): Promise<Uint8Array> => {
+  const makeBaseOnlyDelta = async (base: BlobHash): Promise<DeltizedBlob> => {
     const delta = new Uint8Array(32)
     delta.set(base, 0)
     const compressed = await Deltizer.compressBytes(delta)
     const out = new Uint8Array(1 + compressed.length)
     out[0] = 0x01
     out.set(compressed, 1)
-    return out
+    return asDeltizedBlob(out)
   }
 
   beforeEach(() => {
@@ -227,6 +236,18 @@ describe('Deltizer', () => {
 
       expect(deltizer.cache.getDeltaChainCount(hash2)).toBe(1)
     })
+
+    test('treats cached blob data and delta chain count as independent cache values', async () => {
+      const hash = await createHash('cache-blob-and-count-are-independent')
+      const content =
+        'This hash can have a fully reconstructed blob in cache while still carrying a non-zero delta chain count.'
+
+      deltizer.cache.setBlob(hash, (await deltizer.construct(content)).data)
+      deltizer.cache.setDeltaChainCount(hash, 3)
+
+      expect(await deltizer.reconstruct(hash)).toBe(content)
+      expect(await deltizer.getDeltaCount(hash)).toBe(3)
+    })
   })
 
   describe('Edge Cases', () => {
@@ -291,7 +312,7 @@ describe('Deltizer', () => {
 
     test('throws DeltizingError for unknown data type byte', async () => {
       const hash = await createHash('rec-bad-type')
-      blobStore.set(hash.toBase64(), new Uint8Array([0xff]))
+      blobStore.set(hash.toBase64(), asDeltizedBlob(new Uint8Array([0xff])))
       await expect(deltizer.reconstruct(hash)).rejects.toThrow(DeltizingError)
     })
 
@@ -366,7 +387,10 @@ describe('Deltizer', () => {
 
     test('throws DeltizingError for unknown data type byte', async () => {
       const hash = await createHash('gdc-unknown-type')
-      blobStore.set(hash.toBase64(), new Uint8Array([0x02, 0x00, 0x00, 0x00]))
+      blobStore.set(
+        hash.toBase64(),
+        asDeltizedBlob(new Uint8Array([0x02, 0x00, 0x00, 0x00])),
+      )
       await expect(deltizer.getDeltaCount(hash)).rejects.toThrow(DeltizingError)
     })
 
@@ -519,7 +543,7 @@ describe('LRUBlobCache', () => {
   })
 
   test('evicts the least-recently-used entry when max size is exceeded', async () => {
-    const cache = new LRUBlobCache(2)
+    const cache = new LRUBlobCache({ max: 2 })
     const hash1 = (await Sha256Hash.fromString('lru-1')) as BlobHash
     const hash2 = (await Sha256Hash.fromString('lru-2')) as BlobHash
     const hash3 = (await Sha256Hash.fromString('lru-3')) as BlobHash
@@ -554,7 +578,7 @@ describe('LRUBlobCache', () => {
     test('stores and retrieves a blob', async () => {
       const cache = new LRUBlobCache()
       const hash = (await Sha256Hash.fromString('blob-stored')) as BlobHash
-      const blob = new Uint8Array([1, 2, 3])
+      const blob = asDeltizedBlob(new Uint8Array([1, 2, 3]))
       cache.setBlob(hash, blob)
       expect(cache.getBlob(hash)).toBe(blob)
     })
@@ -562,8 +586,8 @@ describe('LRUBlobCache', () => {
     test('overwrites an existing blob', async () => {
       const cache = new LRUBlobCache()
       const hash = (await Sha256Hash.fromString('blob-overwrite')) as BlobHash
-      const first = new Uint8Array([1, 2, 3])
-      const second = new Uint8Array([4, 5, 6])
+      const first = asDeltizedBlob(new Uint8Array([1, 2, 3]))
+      const second = asDeltizedBlob(new Uint8Array([4, 5, 6]))
       cache.setBlob(hash, first)
       cache.setBlob(hash, second)
       expect(cache.getBlob(hash)).toBe(second)
@@ -575,14 +599,14 @@ describe('LRUBlobCache', () => {
       const cache = new LRUBlobCache()
       const hash = (await Sha256Hash.fromString('preserve-count')) as BlobHash
       cache.setDeltaChainCount(hash, 5)
-      cache.setBlob(hash, new Uint8Array([9, 8, 7]))
+      cache.setBlob(hash, asDeltizedBlob(new Uint8Array([9, 8, 7])))
       expect(cache.getDeltaChainCount(hash)).toBe(5)
     })
 
     test('setDeltaChainCount preserves existing blob', async () => {
       const cache = new LRUBlobCache()
       const hash = (await Sha256Hash.fromString('preserve-blob')) as BlobHash
-      const blob = new Uint8Array([1, 2, 3])
+      const blob = asDeltizedBlob(new Uint8Array([1, 2, 3]))
       cache.setBlob(hash, blob)
       cache.setDeltaChainCount(hash, 4)
       expect(cache.getBlob(hash)).toBe(blob)
@@ -593,18 +617,18 @@ describe('LRUBlobCache', () => {
     test('evicts entries when maxSize is exceeded', async () => {
       // sizeCalculation: blob.length + 8 — a 10-byte blob costs 18 bytes
       // maxSize of 20 fits one entry (18 bytes) but not two (36 bytes)
-      const cache = new LRUBlobCache(100, 20)
+      const cache = new LRUBlobCache({ max: 100, maxSize: 20 })
       const h1 = (await Sha256Hash.fromString('size-evict-1')) as BlobHash
       const h2 = (await Sha256Hash.fromString('size-evict-2')) as BlobHash
-      cache.setBlob(h1, new Uint8Array(10))
-      cache.setBlob(h2, new Uint8Array(10))
+      cache.setBlob(h1, asDeltizedBlob(new Uint8Array(10)))
+      cache.setBlob(h2, asDeltizedBlob(new Uint8Array(10)))
       expect(cache.getBlob(h1)).toBeNull()
       expect(cache.getBlob(h2)).not.toBeNull()
     })
 
     test('entries with only deltaChainCount have minimal size', async () => {
       // Size with no blob is 0 + 8 = 8 bytes; 3 such entries fit in maxSize=30
-      const cache = new LRUBlobCache(100, 30)
+      const cache = new LRUBlobCache({ max: 100, maxSize: 30 })
       const h1 = (await Sha256Hash.fromString('min-size-1')) as BlobHash
       const h2 = (await Sha256Hash.fromString('min-size-2')) as BlobHash
       const h3 = (await Sha256Hash.fromString('min-size-3')) as BlobHash
