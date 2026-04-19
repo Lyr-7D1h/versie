@@ -158,8 +158,9 @@ export class Deltizer {
     const cached = this.cache.getBlob(hash)
     if (cached != null) return cached
     const value = await this.lookup(hash)
-    // only store deltized blobs
-    if (value != null) this.cache.setBlob(hash, value)
+    // only store delta blobs in cache
+    if (value != null && Deltizer.blobType(value) == BlobType.Delta)
+      this.cache.setBlob(hash, value)
     return value
   }
 
@@ -176,6 +177,7 @@ export class Deltizer {
     hash: BlobHash,
     visited: Set<string>,
   ): Promise<string | null> {
+    console.log(hash.toHex())
     const key = hash.toBase64()
     if (visited.has(key)) {
       throw new DeltizingError('Detected delta cycle at hash ' + hash.toHex())

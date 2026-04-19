@@ -27,6 +27,10 @@ function unknownErrorMessage(error: unknown): string {
   return String(error)
 }
 
+function isConstraintError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'ConstraintError'
+}
+
 class IndexDBStorageCreateBaseError extends Error {
   constructor(message: string) {
     super(message)
@@ -237,6 +241,8 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         parentBlobHash = Sha256Hash.fromHex(parentCommit['blob']) as BlobHash
       }
     }
+    // TODO(perf): set most recently used non deltized leaf commit blob in delta cache.
+    // To prevent reconstructing on every new commit when there you just did a commit
     const { data: bytes } = await this.deltizer.construct(data, parentBlobHash)
     const trans = this.db.transaction([COMMITS_STORE, BLOB_STORE], 'readwrite')
     await new Promise<void>((resolve, reject) => {
@@ -244,6 +250,14 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         resolve()
       }
       trans.onerror = (event) => {
+        if (
+          isConstraintError(
+            trans.error ?? (event.target as IDBRequest | undefined)?.error,
+          )
+        ) {
+          resolve()
+          return
+        }
         const err =
           trans.error ?? (event.target as IDBRequest | undefined)?.error
         reject(
@@ -256,9 +270,10 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       const commitsStore = trans.objectStore(COMMITS_STORE)
       const commitReq = commitsStore.add(commit.toJson(), commit.hash)
       commitReq.onerror = (event) => {
-        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
-        if (commitReq.error?.name === 'ConstraintError') {
+        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add - duplicate key => ConstraintError
+        if (isConstraintError(commitReq.error)) {
           event.preventDefault()
+          event.stopPropagation()
           return
         }
         const err =
@@ -271,9 +286,10 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       const blobsStore = trans.objectStore(BLOB_STORE)
       const blobReq = blobsStore.add(bytes, commit.blob)
       blobReq.onerror = (event) => {
-        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
-        if (blobReq.error?.name === 'ConstraintError') {
+        // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add - duplicate key => ConstraintError
+        if (isConstraintError(blobReq.error)) {
           event.preventDefault()
+          event.stopPropagation()
           return
         }
         const err =
@@ -320,7 +336,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
       }
       req.onerror = (e) => {
         // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
-        if (req.error?.name === 'ConstraintError') {
+        if (isConstraintError(req.error)) {
           e.preventDefault()
           resolve()
           return
