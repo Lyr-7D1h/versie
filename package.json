@@ -1,6 +1,6 @@
 {
   "name": "versie",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "A simple and adaptive version management library",
   "author": "Lyr",
   "license": "Apache-2.0",
