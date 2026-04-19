@@ -177,7 +177,6 @@ export class Deltizer {
     hash: BlobHash,
     visited: Set<string>,
   ): Promise<string | null> {
-    console.log(hash.toHex())
     const key = hash.toBase64()
     if (visited.has(key)) {
       throw new DeltizingError('Detected delta cycle at hash ' + hash.toHex())
