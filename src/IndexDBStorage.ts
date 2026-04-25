@@ -226,7 +226,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     return this.delete(BOOKMARKS_STORE, id)
   }
   setBookmark(bookmark: Bookmark): Promise<void> {
-    return this.set(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
+    return this.add(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
   async setCommit(commit: Commit<M>, data: string): Promise<void> {
     let parentBlobHash: BlobHash | undefined
@@ -301,25 +301,25 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
     })
   }
 
-  async set(
+  async add(
     storeName: typeof COMMITS_STORE,
     id: CommitHash,
     /** Commit as json value */
     value: CommitJson<MetaJsonOf<M>>,
   ): Promise<void>
-  async set(
+  async add(
     storeName: typeof BLOB_STORE,
     id: BlobHash,
     /** Compressed delta blob */
     value: Uint8Array,
   ): Promise<void>
-  async set(
+  async add(
     storeName: typeof BOOKMARKS_STORE,
     id: string,
     /** Bookmark as json value */
     value: BookmarkJson,
   ): Promise<void>
-  async set(storeName: StoreName, id: IDBValidKey, value: unknown) {
+  async add(storeName: StoreName, id: IDBValidKey, value: unknown) {
     const trans = this.db.transaction(storeName, 'readwrite')
     await new Promise<void>((resolve, reject) => {
       trans.oncomplete = () => {
@@ -335,6 +335,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
         resolve()
       }
       req.onerror = (e) => {
+        // don't error if already exists
         // https://www.w3.org/TR/IndexedDB/#ref-for-dom-idbobjectstore-add — duplicate key → ConstraintError
         if (isConstraintError(req.error)) {
           e.preventDefault()

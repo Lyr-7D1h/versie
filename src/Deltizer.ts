@@ -2,8 +2,8 @@ import { LRUCache } from 'lru-cache'
 import diff from 'fast-diff'
 import { BlobHash } from './Commit'
 import { Sha256Hash } from './Sha256Hash'
-import { VersieError } from './VersieError'
 import { Tagged } from './Tagged'
+import { DeltizingError } from './VersieError'
 
 const COMPRESSION_FORMAT = 'deflate'
 
@@ -11,11 +11,6 @@ const COMPRESSION_FORMAT = 'deflate'
 export type DeltaBlob = Tagged<Uint8Array, 'delta-raw'>
 /** Compressed bytes prefixed with what type of blob it is (0x0: Regular compressed blob, 0x1: Compressed binary delta format) */
 export type DeltizedBlob = Tagged<Uint8Array, 'delta'>
-
-/** An error that happened when trying to turn commit data in deltas */
-export class DeltizingError extends VersieError {
-  readonly type = 'blob-storage-error'
-}
 
 /** Lookup operation for fetching deltizer compressed data */
 type LookupBlob = (hash: BlobHash) => Promise<DeltizedBlob | null>

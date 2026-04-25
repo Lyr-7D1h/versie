@@ -25,7 +25,7 @@ export interface Storage<M extends MetaData = undefined> {
    * Store a commit with its corresponding data, where `commit.blob` is always the hash of `data`
    * */
   setCommit(commit: Commit<M>, data: string): Promise<void>
-  /** Overwrite existing bookmark or set a new one */
+  /** Set a new bookmark if it doesn't already exist */
   setBookmark(bookmark: Bookmark): Promise<void>
   removeBookmark(name: string): Promise<void>
 

@@ -1,6 +1,6 @@
 import { AsyncResult, Result } from 'typescript-result'
 import { ZodError } from 'zod'
-import { Bookmark, bookmarkSchema } from './Bookmark'
+import { Bookmark, bookmarkSchema, BookmarkJson } from './Bookmark'
 import {
   Commit,
   CommitHash,
@@ -11,7 +11,11 @@ import {
   MetaJsonOf,
 } from './Commit'
 import { Storage } from './Storage'
-import { DeltizingError } from './Deltizer'
+import {
+  BookmarkAlreadyExistsError,
+  BookmarkNotFoundError,
+  DeltizingError,
+} from './VersieError'
 
 export class StorageError extends Error {
   readonly type = 'storage-error'
@@ -36,7 +40,11 @@ export class ParseError extends Error {
   }
 }
 
-export type VersieStorageError = StorageError | DeltizingError
+export type VersieStorageError =
+  | StorageError
+  | DeltizingError
+  | BookmarkNotFoundError
+  | BookmarkAlreadyExistsError
 
 /**
  * Parses serialized metadata into its strongly typed in-memory representation.
@@ -53,6 +61,8 @@ export class VersieStorage<M extends MetaData> {
   private toStorageError(error: unknown): VersieStorageError {
     if (error instanceof StorageError) return error
     if (error instanceof DeltizingError) return error
+    if (error instanceof BookmarkAlreadyExistsError) return error
+    if (error instanceof BookmarkNotFoundError) return error
     if (error instanceof Error) return new StorageError(error)
     return new StorageError(new Error(String(error)))
   }
@@ -135,9 +145,9 @@ export class VersieStorage<M extends MetaData> {
     })
   }
 
-  getAllBookmarks() {
+  getAllBookmarks(): AsyncResult<Bookmark[], ParseError | VersieStorageError> {
     return Result.fromAsync(async () => {
-      let rawList
+      let rawList: BookmarkJson[]
       try {
         rawList = await this.storage.getAllBookmarks()
       } catch (error) {

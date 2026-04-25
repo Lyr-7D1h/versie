@@ -1,12 +1,8 @@
 import { describe, test, expect, beforeEach } from 'vitest'
-import {
-  Deltizer,
-  DeltizedBlob,
-  DeltizingError,
-  LRUBlobCache,
-} from './Deltizer'
+import { Deltizer, DeltizedBlob, LRUBlobCache } from './Deltizer'
 import { Sha256Hash } from './Sha256Hash'
 import { BlobHash } from './Commit'
+import { DeltizingError } from './VersieError'
 
 const asDeltizedBlob = (value: Uint8Array): DeltizedBlob => {
   return value as DeltizedBlob

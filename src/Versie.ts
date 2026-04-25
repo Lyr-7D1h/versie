@@ -1,13 +1,16 @@
-import { Commit, CommitHash, BlobHash, MetaData } from './Commit'
-import {
-  Bookmark,
-  Bookmarks,
-  BookmarkNotFoundError,
-  BookmarkAlreadyExistsError,
-} from './Bookmark'
-export { BookmarkAlreadyExistsError } from './Bookmark'
-import { Storage } from './Storage'
 import { AsyncResult, Result } from 'typescript-result'
+import { Bookmark } from './Bookmark'
+import { Bookmarks } from './Bookmarks'
+import { BlobHash, Commit, CommitHash, MetaData } from './Commit'
+import { Sha256Hash } from './Sha256Hash'
+import { Storage } from './Storage'
+import {
+  BlobNotFoundError,
+  BookmarkAlreadyExistsError,
+  BookmarkNotFoundError,
+  CommitNotFoundError,
+  DeltizingError,
+} from './VersieError'
 import {
   ParseError,
   ParseMetadata,
@@ -15,9 +18,6 @@ import {
   VersieStorage,
   VersieStorageError,
 } from './VersieStorage'
-import { Sha256Hash } from './Sha256Hash'
-import { VersieError } from './VersieError'
-import { DeltizingError } from './Deltizer'
 
 export type Checkout<M extends MetaData> = {
   commit: Commit<M>
@@ -29,40 +29,28 @@ export type HistoryItem<M extends MetaData> = {
   bookmarks: Bookmark[]
 }
 
-export class CommitNotFoundError extends VersieError {
-  readonly type = 'commit-not-found'
-
-  constructor(hash: CommitHash) {
-    super(`Commit '${hash.toHex()}' not found`)
-  }
-}
-
-export class BlobNotFoundError extends VersieError {
-  readonly type = 'blob-not-found'
-
-  constructor(hash: BlobHash) {
-    super(`Blob '${hash.toHex()}' not found`)
-  }
-}
-
 // TODO: use https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system for storage
-/** Version Control Software designed for web environments */
+/**
+ * Version Control Software designed for web environments
+ * */
 export class Versie<M extends MetaData> {
   static async create<M extends MetaData>(
     storage: Storage<M>,
     parseMetadata: ParseMetadata<M>,
   ) {
     const vcsStorage = new VersieStorage(storage, parseMetadata)
-    const bookmarks = await Bookmarks.create(vcsStorage)
-    if (!bookmarks.ok) return bookmarks
+    const bookmarks = new Bookmarks()
+    const res = await vcsStorage.getAllBookmarks()
+    if (!res.ok) return res
+    bookmarks.add(res.value)
 
-    return Result.ok(new Versie<M>(vcsStorage, bookmarks.value))
+    return Result.ok(new Versie<M>(vcsStorage, bookmarks))
   }
 
   private _head: Commit<M> | null = null
   private constructor(
     private readonly storage: VersieStorage<M>,
-    private readonly _bookmarks: Bookmarks<M>,
+    private readonly _bookmarks: Bookmarks,
   ) {}
 
   get head() {
@@ -89,24 +77,47 @@ export class Versie<M extends MetaData> {
    *
    * returns null if already exists
    * */
-  addBookmark(bookmark: Bookmark) {
-    return this._bookmarks.add(bookmark)
+  addBookmark(bookmark: Bookmark): AsyncResult<Bookmark, VersieStorageError> {
+    return Result.fromAsync(async () => {
+      const res = await this.storage.setBookmark(bookmark)
+      if (!res.ok) return res
+      this._bookmarks.add(bookmark)
+      return Result.ok(bookmark)
+    })
   }
 
-  setBookmarkCommit(name: string, commit: CommitHash) {
-    return this._bookmarks.setCommit(name, commit)
+  async setBookmarkCommit(name: string, commit: CommitHash) {
+    const bm = this._bookmarks.getBookmark(name)
+    if (bm === null) return Result.error(new BookmarkNotFoundError(name))
+    const updated = new Bookmark(bm.name, commit, bm.createdOn)
+    let res = await this.storage.removeBookmark(name)
+    if (!res.ok) throw res.error
+    res = await this.storage.setBookmark(updated)
+    if (!res.ok) throw res.error
+    this._bookmarks.setCommit(name, commit)
+    return Result.ok(updated)
   }
 
   bookmarkLookup(commit: CommitHash) {
     return this._bookmarks.bookmarkLookup(commit)
   }
 
-  removeBookmark(name: string) {
+  async removeBookmark(name: string) {
+    const res = await this.storage.removeBookmark(name)
+    if (!res.ok) return res
     return this._bookmarks.remove(name)
   }
 
-  renameBookmark(oldName: string, newName: string) {
-    return this._bookmarks.rename(oldName, newName)
+  async renameBookmark(oldName: string, newName: string) {
+    const old = this._bookmarks.getBookmark(oldName)
+    if (old === null) return Result.error(new BookmarkNotFoundError(oldName))
+    const updated = new Bookmark(newName, old.commit, old.createdOn)
+    await this.storage.removeBookmark(oldName)
+    await this.storage.setBookmark(updated)
+
+    this._bookmarks.remove(oldName)
+    this._bookmarks.add(updated)
+    return Result.ok(updated)
   }
 
   getAllBookmarks() {
