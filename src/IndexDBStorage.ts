@@ -1,5 +1,5 @@
 import { AsyncResult, Result } from 'typescript-result'
-import { JsonValue, Storage } from './Storage'
+import { Bookmark, BookmarkJson } from './Bookmark'
 import {
   BlobHash,
   Commit,
@@ -8,9 +8,9 @@ import {
   MetaData,
   MetaJsonOf,
 } from './Commit'
-import { Bookmark, BookmarkJson } from './Bookmark'
-import { Sha256Hash } from './Sha256Hash'
 import { BlobCache, DeltizedBlob, Deltizer } from './Deltizer'
+import { Sha256Hash } from './Sha256Hash'
+import { JsonValue, Storage } from './Storage'
 
 export const COMMITS_STORE = 'commits'
 export const BLOB_STORE = 'blobs'
@@ -228,6 +228,7 @@ export class IndexDBStorage<M extends MetaData> implements Storage<M> {
   setBookmark(bookmark: Bookmark): Promise<void> {
     return this.add(BOOKMARKS_STORE, bookmark.name, bookmark.toJson())
   }
+  /** Construct and store a `DeltizedBlob` for a given commit and full data  */
   async setCommit(commit: Commit<M>, data: string): Promise<void> {
     let parentBlobHash: BlobHash | undefined
     if (commit.parent) {
