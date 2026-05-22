@@ -1,8 +1,8 @@
-import { describe, test, expect } from 'vitest'
-import { Versie } from './Versie'
-import { Storage } from './Storage'
+import { describe, expect, test } from 'vitest'
 import { Bookmark, BookmarkJson } from './Bookmark'
 import { BlobHash, Commit, CommitHash, CommitJson } from './Commit'
+import { Storage } from './Storage'
+import { Versie } from './Versie'
 
 /** Simple in-memory Storage implementation for testing */
 class MemoryStorage implements Storage {
@@ -56,7 +56,8 @@ describe('Versie', () => {
     if (!commitResult.ok) throw commitResult.error
     const commit = commitResult.value
     if (commit === null) throw new Error('No commit made')
-    await vcs.addBookmark(new Bookmark('main', commit.hash, new Date()))
+    const date = new Date()
+    await vcs.addBookmark('main', commit.hash, date)
 
     const allCommits = await storage.getAllCommits()
     expect(allCommits).toHaveLength(1)
@@ -91,9 +92,8 @@ describe('Versie', () => {
     const commit = commitResult.value
     if (commit === null) throw new Error('No commit made')
 
-    await vcs1Result.value.addBookmark(
-      new Bookmark('main', commit.hash, new Date()),
-    )
+    const date = new Date()
+    await vcs1Result.value.addBookmark('main', commit.hash, date)
 
     // Create a fresh Versie from the same storage (simulates re-opening)
     const vcs2Result = await Versie.create(storage, parseMetadata)
@@ -138,5 +138,51 @@ describe('Versie', () => {
     const bogusHash = commit.blob as unknown as CommitHash
     const checkoutResult = await vcs.checkout(bogusHash)
     expect(checkoutResult.ok).toBe(false)
+  })
+
+  test('adding a bookmark with an invalid name returns an error', async () => {
+    const storage = new MemoryStorage()
+    const vcsResult = await Versie.create(storage, parseMetadata)
+    if (!vcsResult.ok) throw vcsResult.error
+    const vcs = vcsResult.value
+
+    const commitResult = await vcs.commit('const x = 1', undefined)
+    if (!commitResult.ok) throw commitResult.error
+    const commit = commitResult.value
+    if (commit === null) throw new Error('No commit made')
+
+    // Try to add bookmark with invalid name (contains ~)
+    const addResult = await vcs.addBookmark(
+      'invalid~name',
+      commit.hash,
+      new Date(),
+    )
+    expect(addResult.ok).toBe(false)
+    if (!addResult.ok) {
+      expect(addResult.error.type).toBe('invalid-bookmark-name')
+    }
+  })
+
+  test('adding a duplicate bookmark returns an error', async () => {
+    const storage = new MemoryStorage()
+    const vcsResult = await Versie.create(storage, parseMetadata)
+    if (!vcsResult.ok) throw vcsResult.error
+    const vcs = vcsResult.value
+
+    const commitResult = await vcs.commit('const x = 1', undefined)
+    if (!commitResult.ok) throw commitResult.error
+    const commit = commitResult.value
+    if (commit === null) throw new Error('No commit made')
+
+    // Add bookmark
+    const date = new Date()
+    const addResult1 = await vcs.addBookmark('main', commit.hash, date)
+    expect(addResult1.ok).toBe(true)
+
+    // Try to add duplicate bookmark
+    const addResult2 = await vcs.addBookmark('main', commit.hash, date)
+    expect(addResult2.ok).toBe(false)
+    if (addResult2.ok) throw new Error('Expected error')
+    expect(addResult2.error.type).toBe('bookmark-already-exists')
   })
 })

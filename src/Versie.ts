@@ -10,6 +10,7 @@ import {
   BookmarkNotFoundError,
   CommitNotFoundError,
   DeltizingError,
+  InvalidBookmarkNameError,
 } from './VersieError'
 import {
   ParseError,
@@ -75,10 +76,27 @@ export class Versie<M extends MetaData> {
   /**
    * Add a bookmark
    *
-   * returns null if already exists
+   * Returns an error if the bookmark already exists or if the name is invalid
    * */
-  addBookmark(bookmark: Bookmark): AsyncResult<Bookmark, VersieStorageError> {
+  addBookmark(
+    name: string,
+    commit: CommitHash,
+    createdOn: Date,
+  ): AsyncResult<
+    Bookmark,
+    VersieStorageError | BookmarkAlreadyExistsError | InvalidBookmarkNameError
+  > {
     return Result.fromAsync(async () => {
+      // Check if bookmark already exists
+      if (this._bookmarks.getBookmark(name) !== null) {
+        return Result.error(new BookmarkAlreadyExistsError(name))
+      }
+
+      // Create validated bookmark
+      const bookmarkResult = Bookmark.create(name, commit, createdOn)
+      if (!bookmarkResult.ok) return bookmarkResult
+
+      const bookmark = bookmarkResult.value
       const res = await this.storage.setBookmark(bookmark)
       if (!res.ok) return res
       this._bookmarks.add(bookmark)
@@ -86,10 +104,22 @@ export class Versie<M extends MetaData> {
     })
   }
 
-  async setBookmarkCommit(name: string, commit: CommitHash) {
+  async setBookmarkCommit(
+    name: string,
+    commit: CommitHash,
+  ): Promise<
+    Result<
+      Bookmark,
+      BookmarkNotFoundError | VersieStorageError | InvalidBookmarkNameError
+    >
+  > {
     const bm = this._bookmarks.getBookmark(name)
     if (bm === null) return Result.error(new BookmarkNotFoundError(name))
-    const updated = new Bookmark(bm.name, commit, bm.createdOn)
+
+    const updatedResult = Bookmark.create(bm.name, commit, bm.createdOn)
+    if (!updatedResult.ok) return updatedResult
+
+    const updated = updatedResult.value
     let res = await this.storage.removeBookmark(name)
     if (!res.ok) throw res.error
     res = await this.storage.setBookmark(updated)
@@ -108,10 +138,30 @@ export class Versie<M extends MetaData> {
     return this._bookmarks.remove(name)
   }
 
-  async renameBookmark(oldName: string, newName: string) {
+  async renameBookmark(
+    oldName: string,
+    newName: string,
+  ): Promise<
+    Result<
+      Bookmark,
+      | BookmarkNotFoundError
+      | VersieStorageError
+      | InvalidBookmarkNameError
+      | BookmarkAlreadyExistsError
+    >
+  > {
     const old = this._bookmarks.getBookmark(oldName)
     if (old === null) return Result.error(new BookmarkNotFoundError(oldName))
-    const updated = new Bookmark(newName, old.commit, old.createdOn)
+
+    // Check if new name already exists
+    if (this._bookmarks.getBookmark(newName) !== null) {
+      return Result.error(new BookmarkAlreadyExistsError(newName))
+    }
+
+    const updatedResult = Bookmark.create(newName, old.commit, old.createdOn)
+    if (!updatedResult.ok) return updatedResult
+
+    const updated = updatedResult.value
     await this.storage.removeBookmark(oldName)
     await this.storage.setBookmark(updated)
 

@@ -1,9 +1,9 @@
-import { Bookmark } from './Bookmark'
-import { BookmarkNotFoundError } from './VersieError'
-import { CommitHash } from './Commit'
-import { VersieStorageError } from './VersieStorage'
 import { Result } from 'typescript-result'
+import { Bookmark } from './Bookmark'
+import { CommitHash } from './Commit'
 import { Sha256Hash } from './Sha256Hash'
+import { BookmarkNotFoundError, InvalidBookmarkNameError } from './VersieError'
+import { VersieStorageError } from './VersieStorage'
 
 /** Simple data structure for modifying and looking up vcs bookmarks in memory */
 export class Bookmarks {
@@ -19,7 +19,10 @@ export class Bookmarks {
   setCommit(
     bookmarkName: string,
     commit: CommitHash,
-  ): Result<Bookmark, BookmarkNotFoundError | VersieStorageError> {
+  ): Result<
+    Bookmark,
+    BookmarkNotFoundError | VersieStorageError | InvalidBookmarkNameError
+  > {
     const bookmark = this.getBookmark(bookmarkName)
     if (bookmark === null) {
       return Result.error(new BookmarkNotFoundError(bookmarkName))
@@ -28,7 +31,14 @@ export class Bookmarks {
     // update lookup - remove from old commit
     this.lookupDelete(bookmark.name, bookmark.commit.toHex())
 
-    const newBookmark = new Bookmark(bookmark.name, commit, bookmark.createdOn)
+    const newBookmarkResult = Bookmark.create(
+      bookmark.name,
+      commit,
+      bookmark.createdOn,
+    )
+    if (!newBookmarkResult.ok) return newBookmarkResult
+
+    const newBookmark = newBookmarkResult.value
     this.bookmarks.set(bookmarkName, newBookmark)
     this.lookupAdd(newBookmark)
 

@@ -23,6 +23,16 @@ export class BookmarkAlreadyExistsError extends VersieError {
   }
 }
 
+export class InvalidBookmarkNameError extends VersieError {
+  readonly type = 'invalid-bookmark-name'
+
+  constructor(name: string, reason?: string) {
+    super(
+      `Invalid bookmark name '${name}'${reason ? `: ${reason}` : ': must match /^[^~:\\r\\n]{1,32}$/'}`,
+    )
+  }
+}
+
 export class CommitNotFoundError extends VersieError {
   readonly type = 'commit-not-found'
 

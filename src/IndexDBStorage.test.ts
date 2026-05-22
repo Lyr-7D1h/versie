@@ -1,11 +1,11 @@
-import { describe, test, expect, beforeEach } from 'vitest'
-import 'fake-indexeddb/auto'
 import { IDBFactory } from 'fake-indexeddb'
-import { IndexDBStorage } from './IndexDBStorage'
-import { Commit } from './Commit'
+import 'fake-indexeddb/auto'
+import { beforeEach, describe, expect, test } from 'vitest'
 import { Bookmark } from './Bookmark'
-import { Sha256Hash } from './Sha256Hash'
 import type { BlobHash } from './Commit'
+import { Commit } from './Commit'
+import { IndexDBStorage } from './IndexDBStorage'
+import { Sha256Hash } from './Sha256Hash'
 
 function freshIDB() {
   globalThis.indexedDB = new IDBFactory()
@@ -24,7 +24,9 @@ async function createFilledStorage() {
   const blobHash = (await Sha256Hash.fromString(source)) as BlobHash
   const createdOn = new Date(1_700_000_000_000)
   const commit = await Commit.create(blobHash, createdOn, undefined)
-  const bookmark = new Bookmark('main', commit.hash, createdOn)
+  const bookmarkResult = Bookmark.create('main', commit.hash, createdOn)
+  if (!bookmarkResult.ok) throw bookmarkResult.error
+  const bookmark = bookmarkResult.value
 
   await storage.setCommit(commit, source)
   await storage.setBookmark(bookmark)
