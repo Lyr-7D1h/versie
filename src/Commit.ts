@@ -23,7 +23,7 @@ export const commitSchema = z.object({
   blob: blobHashSchema,
   parent: commitHashSchema.optional(),
   createdOn: dateNumberSchema,
-  metadata: z.unknown(),
+  metadata: z.unknown().optional(),
 })
 
 export interface CommitMetadataInterface<TJson extends JsonValue = JsonValue> {
