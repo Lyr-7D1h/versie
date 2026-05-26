@@ -1,6 +1,6 @@
 {
   "name": "versie",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "A simple and adaptive version management library",
   "author": "Lyr",
   "license": "Apache-2.0",
@@ -40,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@microsoft/api-extractor": "^7.58.7",
     "@types/node": "25.9.1",
     "eslint": "10.4.0",
     "fake-indexeddb": "^6.2.5",
